@@ -99,6 +99,12 @@ r_reach = 0.5 * (dv / t_go) * t_go^2 = 0.5 * dv * t_go
 subject to its thrust limit, so the true bound is
 `r_reach = 0.5 * min(a_max, dv/t_go) * t_go^2`.
 
+> **SUPERSEDED 2026-09-03 → docs/adr/2026-09-03-0005-simulation-numerics.md:**
+> spreading the budget evenly is the worst use of it. Correcting once, as early
+> as the information allows, gives `r_reach = dv * (t_go - dv / (2 a_max))`
+> when `dv <= a_max t_go` and `0.5 a_max t_go^2` otherwise, which is 1.7 to 2.0
+> times the value above in the delta-v-limited branch.
+
 This is drawn as the ice-blue reachable ellipse.
 
 > **An intercept is guaranteed when the reachable set contains the uncertainty
@@ -193,3 +199,7 @@ loop until convergence.
 - Terminal delta-v is the brute-force answer and is deliberately expensive.
 - A wave covers more of the box than one probe can, and is the answer when the
   box is simply too large.
+- Probe sensor range bounds the correction window (`t_go <= sensor_range /
+  v_closing`) and therefore the largest box one probe can cover; below a few
+  hundred thousand km of range the thrust limit binds and extra delta-v buys
+  nothing (ADR-0005).

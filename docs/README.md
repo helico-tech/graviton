@@ -28,6 +28,7 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 5. `specs/2026-09-03-GAME-0002-graviton-aesthetic.md` — the visual and audio language.
 6. `adr/2026-09-03-0002-typescript-canvas2d-stack.md` — the technology and its guard-rails.
 7. `adr/2026-09-03-0004-headless-validation-and-evidence.md` — how the agent proves things.
+8. `adr/2026-09-03-0005-simulation-numerics.md` — the numerical recipes and the corrected formulas.
 
 ## Repo scripts
 

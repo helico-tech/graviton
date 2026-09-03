@@ -37,6 +37,15 @@ constrains the floating-point strategy heavily.
    `2^L` substeps of `dt / 2^L`. Because `L` depends only on state, it is
    deterministic. Never key substepping on wall time, framerate or profiling.
 
+   > **SUPERSEDED 2026-09-03 → docs/adr/2026-09-03-0005-simulation-numerics.md:**
+   > the single distance ladder under-refines by a factor of 1.5 in the
+   > exponent and treats a moonlet like a gas giant. The level is now, per
+   > object, the maximum over bodies of a dynamical ladder and a crossing
+   > ladder (both per body, both comparison loops), plus burn and contact
+   > terms. The state-only principle and the `2^L` substep structure stand.
+   > The level is **per object**, never the maximum over all objects, or the
+   > ghost invariant fails in a crowd.
+
 5. **Stable iteration order.** Objects are stored in dense arrays and iterated
    by index. No hash-map or set iteration anywhere in the simulation. No
    parallel reduction without a fixed combination order.
@@ -82,7 +91,9 @@ ever notice its absence.
 **Tier two, dynamic objects.** Probes, debris and free-flying contacts, moved
 by fixed-step symplectic integration in the field of the tier-one bodies. They
 gravitate under tier one, collide with tier-one surfaces and with each other,
-and never perturb tier one.
+and never perturb tier one. They do not gravitate each other (ADR-0005): that
+is what lets a ghost be integrated alone and match the same probe integrated
+among two hundred others.
 
 ## Required tests
 
@@ -117,6 +128,12 @@ Worked example. At a sixty-second timestep a probe travelling 200 km/s covers
 km of a body with a reference radius of ten million kilometres gives a substep
 level of six, so sixty-four substeps of under a second each, and roughly 190 km
 of travel per substep. The ladder does its job without any variable timestep.
+
+> **SUPERSEDED 2026-09-03 → docs/adr/2026-09-03-0005-simulation-numerics.md:**
+> the example's reference radius over-refines by 6x to 13x, and 60 s is the
+> ceiling for the base timestep rather than a comfortable default: 120 s
+> misses a grazing pass by over a kilometre even with the ladder. Measured
+> throughput is 86 000 ticks/s for 50 objects at 60 s.
 
 So: choose the coarsest base timestep the substep ladder can refine adequately
 for the tightest flyby the level permits, and validate that choice per level.

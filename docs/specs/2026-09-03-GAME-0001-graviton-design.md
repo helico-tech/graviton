@@ -190,7 +190,12 @@ at anything.
 **Exposure halos.** A radius around a contact within which a probe accumulates
 exposure. The accumulation rate rises with flux, which falls with the square of
 range, and is modulated by presented cross-section and by dwell time. The probe
-is lost when exposure reaches one. This is deterministic accumulation, not a
+is lost when exposure reaches one.
+
+> **AMENDED 2026-09-03 → docs/adr/2026-09-03-0005-simulation-numerics.md:** a
+> pure inverse-square flux diverges at the contact and destroys every impactor
+> about 330 km short. The flux is flat inside a per-halo core radius, so a
+> head-on impact is survivable above a speed the level sets. This is deterministic accumulation, not a
 dice roll, so the player can compute survivability in the planner and the
 outcome is reproducible. Fast and oblique survives. Slow and head-on does not.
 The pressure is therefore toward expensive high-energy terminal geometry.
@@ -331,6 +336,9 @@ block the technology decision.
   decide whether a coarse base timestep is safe. These must be validated
   numerically against the tightest flyby any level intends to allow, and that
   validation should itself be a test.
+  > **ANSWERED 2026-09-03 → docs/adr/2026-09-03-0005-simulation-numerics.md:**
+  > two-term per-object ladder, `eta = 0.05`, `zeta = 1/32`, `L_max = 10`,
+  > `dt <= 60 s`; the flyby-convergence test runs per level.
 - Whether intercept confidence is shown as a number, a shaded overlap area, or
   both.
 - How many conditional clauses feel right at the point of introduction, and
