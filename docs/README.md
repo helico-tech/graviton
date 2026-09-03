@@ -15,6 +15,8 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 | `docs/issues/` | Issue queue: open, resolved, and why | `YYYY-MM-DD-slug.md` |
 | `docs/domain/` | Domain knowledge that outlives any one design | `slug.md` |
 | `docs/context/` | Project context | `slug.md` |
+| `docs/research/` | Dated research reports that fed the ADRs (ADR-0003) | `YYYY-MM-DD-NN-slug.md` |
+| `docs/evidence/` | Committed proof per unit of work (ADR-0003, ADR-0004) | `<WORK-ID>/README.md` + images |
 
 ## Reading order for someone picking this up cold
 
@@ -24,10 +26,12 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 3. `domain/signal-delay-and-uncertainty.md` — the physics the whole design rests on.
 4. `domain/simulation-determinism.md` — the non-negotiable engineering contract.
 5. `specs/2026-09-03-GAME-0002-graviton-aesthetic.md` — the visual and audio language.
+6. `adr/2026-09-03-0002-typescript-canvas2d-stack.md` — the technology and its guard-rails.
+7. `adr/2026-09-03-0004-headless-validation-and-evidence.md` — how the agent proves things.
 
-## Not yet created
+## Repo scripts
 
-`scripts/new-work-item.*` and `scripts/issues.*` are required by the working
-agreements but are deliberately absent. They must be written in the project's
-own language and toolchain, and no technology has been chosen yet. Create them
-as the first unit of work after the technology decision lands as an ADR.
+`scripts/new-work-item.ts`, `scripts/issues.ts` and `scripts/validate-docs.ts`
+are the deterministic tools the working agreements require; run them with
+plain `node` (Node 24 strips types). Work item IDs are `GRV-NNNN`; epics are
+`EPIC-NN`.
