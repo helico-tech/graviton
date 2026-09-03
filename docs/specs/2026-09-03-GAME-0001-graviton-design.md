@@ -7,8 +7,9 @@ supersedes: none
 
 # Graviton — game design
 
-A two-dimensional ballistic missile game played on a military command display,
-where trajectories obey real gravity and orders travel at the speed of light.
+A two-dimensional science-fiction game of ballistic trajectories and orbital
+mechanics, played on a military command display in an invented star system,
+where paths obey real gravity and orders travel at the speed of light.
 
 Physics this design depends on: `docs/domain/signal-delay-and-uncertainty.md`.
 Engineering contract: `docs/domain/simulation-determinism.md`.

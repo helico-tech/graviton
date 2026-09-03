@@ -1,5 +1,9 @@
 # Signal delay and target uncertainty
 
+Design notes for *Graviton*, a science-fiction strategy game about orbital
+mechanics in invented star systems. The astrodynamics here is standard textbook
+material. The tuning numbers exist to make a puzzle interesting.
+
 The physical laws Graviton's tactical layer rests on. Every mechanic in the
 game is a consequence of something on this page. Read this before changing any
 tuning number.
@@ -60,6 +64,9 @@ r_box  = r_stale + r_meas
 the most important number in the game.
 
 ### Reference magnitudes at one gravity, taken as 10 m/s^2
+
+How large the amber ellipse grows at each range band the campaign uses, for a
+fictional vessel sustaining one gravity.
 
 | Range to target | Round trip | `r_stale` |
 |---|---|---|
@@ -159,6 +166,9 @@ exist. Uplink availability along a plotted trajectory is predictable from the
 ephemeris, so the planner can and must draw the occlusion windows in advance.
 
 ## 8. Solving the light-cone intersection
+
+Both solvers below run inside the simulation whenever the game needs to know
+when an order lands or when an observation was taken.
 
 **Uplink.** Given emission at `t_e` from post position `x_P(t_e)`, find arrival
 time `t_a` satisfying `|x_M(t_a) - x_P(t_e)| = c * (t_a - t_e)`.

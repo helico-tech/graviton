@@ -1,5 +1,8 @@
 # Graviton knowledge base
 
+*Graviton* is a science-fiction strategy game about orbital mechanics and
+signal delay, set in invented star systems.
+
 Declared layout for this repository. Amend deliberately; record why in an ADR.
 
 | Directory | Holds | Naming |

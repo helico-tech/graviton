@@ -1,5 +1,8 @@
 # Simulation determinism contract
 
+Engineering contract for *Graviton*, a science-fiction strategy game about
+orbital mechanics in invented star systems.
+
 Graviton's planner promises the player that a plotted trajectory is what will
 happen. That promise is only as good as the simulation's determinism, so
 determinism is a correctness property here, not a nice-to-have.
