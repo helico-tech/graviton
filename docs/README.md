@@ -1,7 +1,9 @@
 # Graviton knowledge base
 
 *Graviton* is a science-fiction strategy game about orbital mechanics and
-signal delay, set in invented star systems.
+signal delay, set in invented star systems. You run a clearance post,
+dispatching autonomous probes to intercept derelicts and rogue bodies drifting
+in inhabited traffic lanes, minutes of light away.
 
 Declared layout for this repository. Amend deliberately; record why in an ADR.
 
@@ -16,10 +18,12 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 
 ## Reading order for someone picking this up cold
 
-1. `specs/2026-09-03-GAME-0001-graviton-design.md` — what the game is and how it plays.
-2. `domain/signal-delay-and-uncertainty.md` — the physics the whole design rests on.
-3. `domain/simulation-determinism.md` — the non-negotiable engineering contract.
-4. `specs/2026-09-03-GAME-0002-graviton-aesthetic.md` — the visual and audio language.
+1. `adr/2026-09-03-0001-clearance-framing.md` — the setting, and the vocabulary
+   every other document uses.
+2. `specs/2026-09-03-GAME-0001-graviton-design.md` — what the game is and how it plays.
+3. `domain/signal-delay-and-uncertainty.md` — the physics the whole design rests on.
+4. `domain/simulation-determinism.md` — the non-negotiable engineering contract.
+5. `specs/2026-09-03-GAME-0002-graviton-aesthetic.md` — the visual and audio language.
 
 ## Not yet created
 
