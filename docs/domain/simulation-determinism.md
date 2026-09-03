@@ -28,7 +28,7 @@ constrains the floating-point strategy heavily.
 
 3. **Warp changes work per frame, never `dt`.** Time warp advances more ticks
    per rendered frame. It must never enlarge the timestep. This is the single
-   easiest way to destroy the planner's promise and it must be guarded by a
+   easiest way to break the planner's promise and it must be guarded by a
    test.
 
 4. **Deterministic substepping only.** Close flybys need finer integration.
@@ -67,7 +67,7 @@ constrains the floating-point strategy heavily.
 
 12. **Signal delay applies to orders and telemetry, never to the ephemeris.**
     Celestial bodies are on published orbits and are always drawn at their true
-    current position. Only observations of missiles, mobile targets, defenses
+    current position. Only observations of probes, mobile contacts, hazards
     and debris are delayed.
 
 ## The two-tier model
@@ -79,7 +79,7 @@ perturb each other. That simplification is deliberate: it buys exact
 reproducibility, instant future queries and stable levels, and no player will
 ever notice its absence.
 
-**Tier two, dynamic objects.** Missiles, debris and free-flying targets, moved
+**Tier two, dynamic objects.** Probes, debris and free-flying contacts, moved
 by fixed-step symplectic integration in the field of the tier-one bodies. They
 gravitate under tier one, collide with tier-one surfaces and with each other,
 and never perturb tier one.
@@ -112,7 +112,7 @@ makes the same flight a few tens of thousands of ticks, which is nothing, and
 the substep ladder in rule four still refines close approaches to well under a
 second where it matters.
 
-Worked example. At a sixty-second timestep a missile travelling 200 km/s covers
+Worked example. At a sixty-second timestep a probe travelling 200 km/s covers
 12 000 km per tick, far too coarse near a gas giant. Approaching within 100 000
 km of a body with a reference radius of ten million kilometres gives a substep
 level of six, so sixty-four substeps of under a second each, and roughly 190 km
