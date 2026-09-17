@@ -25,7 +25,9 @@ const BUDGET = EXHAUST_VELOCITY * Math.log(WET_MASS / DRY_MASS); // ~27488.72 m/
 // the burn starts, so its gravity increments differ from the probe's too,
 // leaving a second-order contamination the tiny-mu setup never introduces.
 function farField(): BodyTable {
-  return createBodyTable([{ parent: -1, mu: 1, radius: 1 }]);
+  return createBodyTable([
+    { parent: -1, mu: 1, radius: 1, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+  ]);
 }
 
 interface ProbeArgs {
@@ -184,7 +186,9 @@ describe('frozen direction', () => {
     // A real attractor this time -- close enough that the probe's velocity
     // direction visibly rotates over the course of a long burn.
     const mu = 3.986004418e14; // Earth-like
-    const bodies = createBodyTable([{ parent: -1, mu, radius: 1 }]);
+    const bodies = createBodyTable([
+      { parent: -1, mu, radius: 1, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+    ]);
     const objects = createDynamicObjects(1);
     const i = objects.count++;
     const r = 4e7;

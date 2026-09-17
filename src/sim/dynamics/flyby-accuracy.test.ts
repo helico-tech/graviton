@@ -75,7 +75,9 @@ function runFlyby({
   const tEnd = -t0 + DOWNSTREAM;
   const nTicks = Math.round((tEnd - t0) / dt);
 
-  const bodies = createBodyTable([{ parent: -1, mu, radius }]);
+  const bodies = createBodyTable([
+    { parent: -1, mu, radius, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+  ]);
   const objects = createDynamicObjects(1);
   objects.count = 1;
   const init = hyperState(mu, rp, vinf, t0);

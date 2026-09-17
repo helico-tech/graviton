@@ -6,6 +6,7 @@
 
 import { dcosOut, dsincos, dsinOut } from './math/kernels.ts';
 import { evaluateEphemeris } from './ephemeris/bodies.ts';
+import { NEVER_LAUNCHED, railGeometry } from './rails.ts';
 import type { Sim } from './sim.ts';
 
 /** 1/2^32 of a turn (ADR-0006 §4, superseding the 1/65536 unit ADR-0005
@@ -17,18 +18,18 @@ import type { Sim } from './sim.ts';
 export const HEADING_TURN = 4294967296;
 const TWO_PI = 6.283185307179586;
 const MM_PER_M = 1000;
-/** How far above a body's surface a launched probe starts, m -- placeholder
- *  clearance until launch rails exist (GAME-0001 §4.2). */
-const LAUNCH_CLEARANCE_M = 1000;
 
 export interface LaunchCommand {
   tick: number;
   kind: 'launch';
-  /** Body index to launch from. */
-  body: number;
-  /** 0..4294967295 (2^32 - 1), 1/2^32 of a turn. */
+  /** Rail index (Sim.rails order; GRV-0014 -- the old radial-launch `body`
+   *  field is gone, a rail is now the only way to launch). */
+  rail: number;
+  /** 0..4294967295 (2^32 - 1), 1/2^32 of a turn: the launch's absolute
+   *  inertial heading. */
   heading: number;
-  /** mm/s, relative to the launch body. */
+  /** mm/s, muzzle speed relative to the rail -- added to the host's own
+   *  velocity plus its surface rotation velocity (GAME-0001 §4.2). */
   speed: number;
 }
 
@@ -57,33 +58,84 @@ function requireRange(value: number, name: string, min: number, max: number): vo
     throw new Error(`${name} must be in [${min}, ${max}], got ${value}`);
 }
 
+/** Why a launch would be rejected (GRV-0014): a discriminated reason rather
+ *  than a thrown error, so the planner UI can explain a disabled launch
+ *  before the player commits to it. `applyLaunch` is the only caller that
+ *  turns a non-null result into a throw; format checks (integer-ness,
+ *  range) stay there too, since those are the log's own quantisation
+ *  contract, not a rail rule.
+ *
+ *  Reads `sim` but never writes it, so it is safe to call speculatively, at
+ *  any tick, without perturbing the simulation -- checked directly
+ *  (commands.test.ts: "checkLaunch is pure"). It evaluates the ephemeris
+ *  into `sim.scratch.eph` as scratch work, exactly as `applyLaunch` itself
+ *  does; `scratch` is derived, per-run working memory, never part of
+ *  `hashSim`/`serializeSim` (sim.ts), so overwriting it here changes
+ *  nothing the determinism contract cares about. Assumes `command.rail` is
+ *  a valid index into `sim.rails` -- callers (`applyLaunch`, and any
+ *  planner UI) validate that first, the same way an out-of-range `probe` on
+ *  a burn command is validated before it ever reaches burn logic. */
+export type LaunchRejection = 'capacity' | 'reloading' | 'speed' | 'cone';
+
+export function checkLaunch({
+  sim,
+  command,
+}: {
+  sim: Sim;
+  command: LaunchCommand;
+}): LaunchRejection | null {
+  if (sim.objects.count >= sim.scenario.capacity) return 'capacity';
+
+  const rails = sim.rails;
+  const rail = command.rail;
+  const last = sim.railLastLaunchTick[rail]!;
+  if (last !== NEVER_LAUNCHED && command.tick - last < rails.reloadTicks[rail]!) return 'reloading';
+
+  const speed = command.speed / MM_PER_M;
+  if (speed < rails.muzzleSpeedMin[rail]! || speed > rails.muzzleSpeedMax[rail]!) return 'speed';
+
+  const t = command.tick * sim.scenario.dt;
+  evaluateEphemeris(sim.bodies, t, sim.scratch.eph);
+  const { ux, uy } = railGeometry({ bodies: sim.bodies, rails, rail, t, eph: sim.scratch.eph });
+  dsincos((command.heading * TWO_PI) / HEADING_TURN);
+  const dot = dcosOut * ux + dsinOut * uy;
+  if (dot < rails.cosHeadingCone[rail]!) return 'cone';
+
+  return null;
+}
+
 function applyLaunch(sim: Sim, command: LaunchCommand): void {
-  requireInt(command.body, 'body');
-  requireRange(command.body, 'body', 0, sim.bodies.count - 1);
+  requireInt(command.rail, 'rail');
+  requireRange(command.rail, 'rail', 0, sim.rails.count - 1);
   requireInt(command.heading, 'heading');
   requireRange(command.heading, 'heading', 0, HEADING_TURN - 1);
   requireInt(command.speed, 'speed');
   requireRange(command.speed, 'speed', 0, Number.MAX_SAFE_INTEGER);
-  if (sim.objects.count >= sim.scenario.capacity)
-    throw new Error(`launch: object capacity ${sim.scenario.capacity} exceeded`);
 
-  // Body state at this tick's start, the same instant stepTick will use for
+  const reason = checkLaunch({ sim, command });
+  if (reason !== null) throw new Error(`launch: rejected (${reason})`);
+
+  // Rail state at this tick's start, the same instant stepTick will use for
   // this same tick (sim.ts's advance calls commands before stepTick).
-  evaluateEphemeris(sim.bodies, sim.tick * sim.scenario.dt, sim.scratch.eph);
+  const t = command.tick * sim.scenario.dt;
+  evaluateEphemeris(sim.bodies, t, sim.scratch.eph);
+  const geometry = railGeometry({
+    bodies: sim.bodies,
+    rails: sim.rails,
+    rail: command.rail,
+    t,
+    eph: sim.scratch.eph,
+  });
   dsincos((command.heading * TWO_PI) / HEADING_TURN);
-  const nx = dcosOut;
-  const ny = dsinOut;
+  const dx = dcosOut;
+  const dy = dsinOut;
   const speed = command.speed / MM_PER_M;
-  const offset = sim.bodies.radius[command.body]! + LAUNCH_CLEARANCE_M;
 
-  // Radial launch from the host body's surface: a placeholder geometry until
-  // launch rails exist (GAME-0001 §4.2) -- position and velocity share the
-  // same direction because there is no rail to set them independently.
   const i = sim.objects.count++;
-  sim.objects.x[i] = sim.scratch.eph.x[command.body]! + nx * offset;
-  sim.objects.y[i] = sim.scratch.eph.y[command.body]! + ny * offset;
-  sim.objects.vx[i] = sim.scratch.eph.vx[command.body]! + nx * speed;
-  sim.objects.vy[i] = sim.scratch.eph.vy[command.body]! + ny * speed;
+  sim.objects.x[i] = geometry.x;
+  sim.objects.y[i] = geometry.y;
+  sim.objects.vx[i] = geometry.vx + dx * speed;
+  sim.objects.vy[i] = geometry.vy + dy * speed;
   sim.objects.hitBody[i] = -1;
   sim.objects.mass[i] = sim.scenario.probe.dryMass + sim.scenario.probe.propellantMass;
   sim.objects.dryMass[i] = sim.scenario.probe.dryMass;
@@ -94,6 +146,8 @@ function applyLaunch(sim: Sim, command: LaunchCommand): void {
   sim.objects.burnTarget[i] = 0;
   sim.objects.burnDelivered[i] = 0;
   sim.objects.burning[i] = 0;
+
+  sim.railLastLaunchTick[command.rail] = command.tick;
 }
 
 function applyBurn(sim: Sim, command: BurnCommand): void {

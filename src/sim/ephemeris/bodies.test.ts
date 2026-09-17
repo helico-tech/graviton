@@ -5,7 +5,7 @@
 // exempt from src/sim's determinism lint (ADR-0002), and never part of the
 // simulation itself.
 import { describe, expect, test } from 'vitest';
-import { createBodyTable, evaluateEphemeris } from './bodies.ts';
+import { createBodyTable, evaluateEphemeris, surfacePhase } from './bodies.ts';
 import type { BodyDef, EphemerisOut } from './bodies.ts';
 
 const MU_SUN = 1.32712440018e20;
@@ -23,7 +23,13 @@ function makeOut(n: number): EphemerisOut {
 }
 
 describe('createBodyTable validation', () => {
-  const sun: BodyDef = { parent: -1, mu: MU_SUN, radius: 6.957e8 };
+  const sun: BodyDef = {
+    parent: -1,
+    mu: MU_SUN,
+    radius: 6.957e8,
+    rotationPeriod: 2.2e6,
+    axialPhaseAtEpoch: 0,
+  };
   const earthlike: BodyDef = {
     parent: 0,
     mu: MU_EARTH,
@@ -32,6 +38,8 @@ describe('createBodyTable validation', () => {
     e: 0.1,
     argPeriapsis: 0,
     meanAnomaly0: 0,
+    rotationPeriod: 86400,
+    axialPhaseAtEpoch: 0,
   };
 
   test('throws when eccentricity exceeds 0.8', () => {
@@ -76,6 +84,13 @@ describe('createBodyTable validation', () => {
     ['argPeriapsis', -Infinity],
     ['meanAnomaly0', NaN],
     ['meanAnomaly0', Infinity],
+    ['rotationPeriod', 0],
+    ['rotationPeriod', -1],
+    ['rotationPeriod', NaN],
+    ['rotationPeriod', Infinity],
+    ['axialPhaseAtEpoch', NaN],
+    ['axialPhaseAtEpoch', Infinity],
+    ['axialPhaseAtEpoch', -Infinity],
   ])('throws when the orbiting body has %s = %p', (field, value) => {
     expect(() => createBodyTable([sun, { ...earthlike, [field]: value }])).toThrow();
   });
@@ -86,6 +101,12 @@ describe('createBodyTable validation', () => {
     ['radius', NaN],
     ['mu', NaN],
     ['mu', Infinity],
+    ['rotationPeriod', 0],
+    ['rotationPeriod', -1],
+    ['rotationPeriod', NaN],
+    ['rotationPeriod', Infinity],
+    ['axialPhaseAtEpoch', NaN],
+    ['axialPhaseAtEpoch', Infinity],
   ])('throws when the primary body has %s = %p', (field, value) => {
     expect(() => createBodyTable([{ ...sun, [field]: value }, earthlike])).toThrow();
   });
@@ -94,8 +115,18 @@ describe('createBodyTable validation', () => {
 describe('circular orbit', () => {
   const a = AU;
   const table = createBodyTable([
-    { parent: -1, mu: MU_SUN, radius: 6.957e8 },
-    { parent: 0, mu: MU_EARTH, radius: 6.371e6, a, e: 0, argPeriapsis: 0, meanAnomaly0: 0 },
+    { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
+    {
+      parent: 0,
+      mu: MU_EARTH,
+      radius: 6.371e6,
+      a,
+      e: 0,
+      argPeriapsis: 0,
+      meanAnomaly0: 0,
+      rotationPeriod: 86400,
+      axialPhaseAtEpoch: 0,
+    },
   ]);
   const out = makeOut(2);
   const meanMotion = Math.sqrt(MU_SUN / (a * a * a));
@@ -134,8 +165,18 @@ describe('eccentric orbit (e=0.5)', () => {
   const a = AU;
   const e = 0.5;
   const table = createBodyTable([
-    { parent: -1, mu: MU_SUN, radius: 6.957e8 },
-    { parent: 0, mu: MU_EARTH, radius: 6.371e6, a, e, argPeriapsis: 0, meanAnomaly0: 0 },
+    { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
+    {
+      parent: 0,
+      mu: MU_EARTH,
+      radius: 6.371e6,
+      a,
+      e,
+      argPeriapsis: 0,
+      meanAnomaly0: 0,
+      rotationPeriod: 86400,
+      axialPhaseAtEpoch: 0,
+    },
   ]);
   const out = makeOut(2);
   const meanMotion = Math.sqrt(MU_SUN / (a * a * a));
@@ -203,6 +244,8 @@ describe('moon: three-level parent chain', () => {
       e: 0.02,
       argPeriapsis: 0.4,
       meanAnomaly0: 1.1,
+      rotationPeriod: 86400,
+      axialPhaseAtEpoch: 0,
     };
     const moonRelative: BodyDef = {
       parent: 0,
@@ -212,10 +255,12 @@ describe('moon: three-level parent chain', () => {
       e: 0.0549,
       argPeriapsis: 0.9,
       meanAnomaly0: 2.7,
+      rotationPeriod: 2.36e6,
+      axialPhaseAtEpoch: 0,
     };
 
     const full = createBodyTable([
-      { parent: -1, mu: MU_SUN, radius: 6.957e8 },
+      { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
       planet,
       { ...moonRelative, parent: 1 },
     ]);
@@ -223,7 +268,13 @@ describe('moon: three-level parent chain', () => {
     // an independent computation of "the moon's own relative state" that
     // never goes through the three-level chain's offset composition.
     const standalone = createBodyTable([
-      { parent: -1, mu: planet.mu, radius: planet.radius },
+      {
+        parent: -1,
+        mu: planet.mu,
+        radius: planet.radius,
+        rotationPeriod: planet.rotationPeriod,
+        axialPhaseAtEpoch: planet.axialPhaseAtEpoch,
+      },
       moonRelative,
     ]);
 
@@ -248,8 +299,18 @@ describe('large t', () => {
   test('a 10-year query still works and matches the time-reduced equivalent', () => {
     const a = 1e7; // fast, low orbit: many periods over 10 years
     const table = createBodyTable([
-      { parent: -1, mu: MU_EARTH, radius: 6.371e6 },
-      { parent: 0, mu: 100, radius: 1, a, e: 0.1, argPeriapsis: 0.3, meanAnomaly0: 0.5 },
+      { parent: -1, mu: MU_EARTH, radius: 6.371e6, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+      {
+        parent: 0,
+        mu: 100,
+        radius: 1,
+        a,
+        e: 0.1,
+        argPeriapsis: 0.3,
+        meanAnomaly0: 0.5,
+        rotationPeriod: 86400,
+        axialPhaseAtEpoch: 0,
+      },
     ]);
     const meanMotion = Math.sqrt(MU_EARTH / (a * a * a));
     const period = (2 * Math.PI) / meanMotion;
@@ -264,5 +325,57 @@ describe('large t', () => {
     // ~3.15e8 s): docs/evidence/GRV-0005/README.md.
     expect(Math.abs(out.x[1]! - outReduced.x[1]!) / a).toBeLessThan(1e-9);
     expect(Math.abs(out.y[1]! - outReduced.y[1]!) / a).toBeLessThan(1e-9);
+  });
+});
+
+describe('surfacePhase (GRV-0014)', () => {
+  const ROTATION_PERIOD = 86400; // 1 day
+  const AXIAL_PHASE_AT_EPOCH = 0.7;
+  const body: BodyDef = {
+    parent: -1,
+    mu: MU_EARTH,
+    radius: 6.371e6,
+    rotationPeriod: ROTATION_PERIOD,
+    axialPhaseAtEpoch: AXIAL_PHASE_AT_EPOCH,
+  };
+  const table = createBodyTable([body]);
+
+  test('t=0 reads back axialPhaseAtEpoch', () => {
+    expect(surfacePhase(table, 0, 0)).toBeCloseTo(AXIAL_PHASE_AT_EPOCH, 12);
+  });
+
+  test('one rotation period later, the reduced phase returns to the same value -- it advanced by exactly one turn and wrapped', () => {
+    const t0 = 12345.6; // arbitrary, well clear of a period boundary
+    const oneTurnLater = t0 + ROTATION_PERIOD;
+    expect(
+      Math.abs(surfacePhase(table, 0, oneTurnLater) - surfacePhase(table, 0, t0)),
+    ).toBeLessThan(1e-9);
+  });
+
+  test('phase rate over a short interval (no wrap crossed) matches 2*pi / rotationPeriod', () => {
+    const t0 = 5000;
+    const dt = 1; // seconds, tiny next to the 86400 s period
+    const rate = (surfacePhase(table, 0, t0 + dt) - surfacePhase(table, 0, t0)) / dt;
+    const expected = (2 * Math.PI) / ROTATION_PERIOD;
+    expect(Math.abs(rate - expected) / expected).toBeLessThan(1e-9);
+  });
+
+  test('prograde: phase increases (never decreases) over a short forward step', () => {
+    const t0 = 30000;
+    expect(surfacePhase(table, 0, t0 + 10)).toBeGreaterThan(surfacePhase(table, 0, t0));
+  });
+
+  test('a 10-year query still works, and matches the time-reduced equivalent', () => {
+    const tenYears = 10 * 365.25 * 86400;
+    // The whole point of reducing the turn fraction before the 2*pi multiply
+    // (research §2.2): the argument this hands to a trig kernel stays within
+    // [axialPhaseAtEpoch, axialPhaseAtEpoch + 2*pi) regardless of t.
+    expect(() => surfacePhase(table, 0, tenYears)).not.toThrow();
+    const phase = surfacePhase(table, 0, tenYears);
+    expect(phase).toBeGreaterThanOrEqual(AXIAL_PHASE_AT_EPOCH);
+    expect(phase).toBeLessThan(AXIAL_PHASE_AT_EPOCH + 2 * Math.PI);
+
+    const reduced = tenYears % ROTATION_PERIOD;
+    expect(Math.abs(phase - surfacePhase(table, 0, reduced))).toBeLessThan(1e-9);
   });
 });

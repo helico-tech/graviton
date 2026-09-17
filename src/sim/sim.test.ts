@@ -14,12 +14,32 @@ const DT = 60;
 const MU = 3.986004418e14; // Earth-like
 const RADIUS = 6.371e6;
 
+// A very long rotation period and a full (pi) heading cone: these tests are
+// about warp invariance, serialisation and burn-node ordering, not rail
+// geometry (that's commands.test.ts and rails.test.ts), so spin is given a
+// real but practically negligible rate (omega*radius ~ 0.04 m/s, against
+// launch speeds of several km/s) rather than perturbing every trajectory
+// these tests already reason about.
+const ROTATION_PERIOD = 1e9;
+
 function scenario(overrides: Partial<Scenario> = {}): Scenario {
   return {
     dt: DT,
     capacity: 4,
     burnNodeCapacity: 4,
-    bodies: [{ parent: -1, mu: MU, radius: RADIUS }],
+    bodies: [
+      { parent: -1, mu: MU, radius: RADIUS, rotationPeriod: ROTATION_PERIOD, axialPhaseAtEpoch: 0 },
+    ],
+    rails: [
+      {
+        host: 0,
+        longitude: 0,
+        muzzleSpeedMin: 1,
+        muzzleSpeedMax: 1_000_000,
+        headingCone: Math.PI,
+        reloadTicks: 0,
+      },
+    ],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection', 'sensor_noise'],
     ...overrides,
@@ -34,7 +54,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
 // nudge it off the purely radial line without threatening that guarantee.
 function grazeLog(): Command[] {
   return [
-    { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 12_000_000 },
+    { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 12_000_000 },
     { tick: 5, kind: 'burn', probe: 0, atTick: 10, prograde: 50_000, lateral: 20_000 },
   ];
 }
@@ -160,6 +180,39 @@ describe('serialisation round-trip', () => {
     expect(hashSim(reloaded)).toBe(hashSim(uninterrupted));
   });
 
+  // GRV-0014: railLastLaunchTick is Sim state, not derived scratch -- it
+  // must round-trip through serialise/deserialise, and a run that never
+  // launches must keep its sentinel (NEVER_LAUNCHED, -1).
+  test("a rail's last-launch tick round-trips through serialise/deserialise", () => {
+    const sim = createSim({ scenario: scenario(), seed: 11 });
+    run(sim, grazeLog(), 1); // executes the tick-0 launch from rail 0
+    expect(sim.railLastLaunchTick[0]).toBe(0);
+
+    const bytes = serializeSim(sim);
+    const reloaded = deserializeSim({ scenario: scenario(), bytes });
+    expect(Array.from(reloaded.railLastLaunchTick)).toEqual(Array.from(sim.railLastLaunchTick));
+  });
+
+  test('a rail that never launches keeps the NEVER_LAUNCHED sentinel through a round-trip', () => {
+    const sim = createSim({ scenario: scenario(), seed: 11 });
+    run(sim, [], 5); // no commands at all
+    expect(sim.railLastLaunchTick[0]).toBe(-1);
+
+    const bytes = serializeSim(sim);
+    const reloaded = deserializeSim({ scenario: scenario(), bytes });
+    expect(reloaded.railLastLaunchTick[0]).toBe(-1);
+  });
+
+  test('railLastLaunchTick is hash-sensitive', () => {
+    const sim = createSim({ scenario: scenario(), seed: 11 });
+    run(sim, grazeLog(), 1);
+    const before = hashSim(sim);
+
+    sim.railLastLaunchTick[0] = 999;
+
+    expect(hashSim(sim)).not.toBe(before);
+  });
+
   test('serialise -> deserialise -> serialise is byte-identical', () => {
     const sim = createSim({ scenario: scenario(), seed: 3 });
     run(sim, grazeLog(), 15);
@@ -245,7 +298,7 @@ describe('substep determinism', () => {
 
 describe('burn nodes for a probe that has hit a body', () => {
   function launchOnlyLog(): Command[] {
-    return [{ tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }]; // radial, sub-escape: falls back and hits
+    return [{ tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 2_000_000 }]; // radial, sub-escape: falls back and hits
   }
 
   // Finds the tick the radial-fall probe actually hits at, empirically, rather
@@ -265,8 +318,8 @@ describe('burn nodes for a probe that has hit a body', () => {
     const dueTick = hitTick + 10;
     const laterDueTick = dueTick + 20;
     const log: Command[] = [
-      { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }, // probe 0: falls back and hits
-      { tick: 0, kind: 'launch', body: 0, heading: 32768 * 65536, speed: 12_000_000 }, // probe 1: escapes, unaffected
+      { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 2_000_000 }, // probe 0: radial, falls back and hits
+      { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 12_000_000 }, // probe 1: radial, escapes unaffected
       { tick: 0, kind: 'burn', probe: 0, atTick: dueTick, prograde: 100_000, lateral: 0 },
       { tick: 0, kind: 'burn', probe: 1, atTick: dueTick, prograde: 100_000, lateral: 0 },
       { tick: 0, kind: 'burn', probe: 0, atTick: laterDueTick, prograde: 200_000, lateral: 0 },
@@ -338,7 +391,7 @@ describe('pending burn node ordering', () => {
   // burn ends -- so both spend most of the run waiting on the same probe.
   function longBurnLog(): Command[] {
     return [
-      { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 12_000_000 },
+      { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 12_000_000 },
       { tick: 0, kind: 'burn', probe: 0, atTick: 0, prograde: 500_000, lateral: 0 },
       { tick: 1, kind: 'burn', probe: 0, atTick: 8, prograde: 30_000, lateral: 0 },
       { tick: 1, kind: 'burn', probe: 0, atTick: 3, prograde: 10_000, lateral: 0 },

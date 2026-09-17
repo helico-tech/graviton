@@ -81,8 +81,18 @@ interface RunResult {
  *  encounter itself. */
 function run(): RunResult {
   const bodies = createBodyTable([
-    { parent: -1, mu: MU_SUN, radius: 6.957e8 },
-    { parent: 0, mu: MU_JUPITER, radius: R_JUPITER, a: AU, e: 0, argPeriapsis: 0, meanAnomaly0: 0 },
+    { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
+    {
+      parent: 0,
+      mu: MU_JUPITER,
+      radius: R_JUPITER,
+      a: AU,
+      e: 0,
+      argPeriapsis: 0,
+      meanAnomaly0: 0,
+      rotationPeriod: 35730,
+      axialPhaseAtEpoch: 0,
+    },
   ]);
   const t0 = -tAtR(MU_JUPITER, RP, VINF, R_START);
   const rel = hyperState(MU_JUPITER, RP, VINF, t0);

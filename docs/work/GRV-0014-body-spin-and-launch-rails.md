@@ -1,7 +1,7 @@
 ---
 id: GRV-0014
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0014 Body spin and launch rails
 
@@ -23,3 +23,14 @@ is a rotation phase (GAME-0001 §4.2); the radial placeholder launch goes away.
 - The golden is re-recorded once with `SIM_VERSION` bumped, and the evidence says why.
 
 **Verification.** `pnpm check`, `pnpm e2e`, `pnpm headless`.
+
+**Delivered.** `BodyDef` carries `rotationPeriod`/`axialPhaseAtEpoch`; `surfacePhase` reduces the
+turn fraction before the `2*pi` multiply, so the trig argument stays small at any `t` and spin is
+always prograde. New `src/sim/rails.ts` (`RailDef`, `createRailTable`, `railGeometry`) computes a
+rail's surface point and host-plus-rotation velocity; `LaunchCommand.body` is gone, replaced by
+`rail`. `checkLaunch` (`commands.ts`) is a pure `'capacity' | 'reloading' | 'speed' | 'cone' |
+null` predicate that `applyLaunch` and (later) the planner UI both call; rail state
+(`railLastLaunchTick`, `NEVER_LAUNCHED` = -1) is part of `Sim`, hashed and serialised
+(`FORMAT_VERSION` 1 -> 2). The golden is re-authored with a rail-based launch from the moon
+(`SIM_VERSION` 1 -> 2, closest approach 3.02 giant radii, max substep level 5, burn completes, no
+collision over 6000 ticks). See `docs/evidence/GRV-0014/README.md`.
