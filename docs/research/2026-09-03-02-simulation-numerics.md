@@ -601,6 +601,13 @@ function kick(idx, hk, t_stage):
         vy[i] += hk * ay
 ```
 
+> **SUPERSEDED 2026-09-17 → docs/evidence/GRV-0007/README.md:** the `kick` above was never
+> run; `p11_burn.py` integrates burns per substep in free space, not inside PEFRL kicks. With
+> `abs(hk)` the two negative kicks spend propellant while pushing backwards and delivered
+> delta-v is off by 40-70 %. Mass and the accumulator move with the signed `hk`, each kick
+> delivers the exact rocket-equation delta-v for the mass it consumes, and a burn ends only
+> on a positive kick.
+
 ### 3.6 A burn node's "prograde + lateral m/s"
 
 A burn node is `(t_act, dv_prograde, dv_lateral)`. Mapping it to the integrator:
