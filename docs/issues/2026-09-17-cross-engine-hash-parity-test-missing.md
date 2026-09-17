@@ -1,8 +1,9 @@
 ---
-status: open
+status: triaged
 priority: P2
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0011
 ---
 # ADR-0002 guard-rail 5 (cross-engine hash parity) is not implemented
 
