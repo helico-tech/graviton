@@ -1,8 +1,9 @@
 ---
-status: open
+status: triaged
 priority: P3
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0008
 ---
 # Burn ladder term uses target-only t_burn_remaining, ignoring tank exhaustion
 
