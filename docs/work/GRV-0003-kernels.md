@@ -1,7 +1,7 @@
 ---
 id: GRV-0003
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0003 Deterministic transcendental kernels
 
@@ -19,3 +19,12 @@ dexp dlog`, ported from `docs/research/2026-09-03-02-simulation-numerics-probes/
 - `dsin`/`dcos` throw on `|x| > 2^18` (research §2.2).
 
 **Verification.** `pnpm check`.
+
+**Delivered.** `src/sim/math/kernels.ts` (`dsin dcos dsincos datan datan2
+dacos dexp dlog`), a line-for-line port of `q1_core.mjs`'s kernels via a
+module-level `DataView` for raw bits (matching `src/sim/state/hash.ts`), plus
+`src/sim/math/kernels.test.ts`: the 18 research §2.6 cross-check bit patterns
+(re-measured on this Node/CPython, not copied), a 92-value <=2ulp grid
+against a 70-digit `decimal.Decimal` reference, the `|x| > 2^18` range guard,
+and special-value/loose-sanity coverage. Measured max ulp per function and
+golden-vector derivation in `docs/evidence/GRV-0003/README.md`.
