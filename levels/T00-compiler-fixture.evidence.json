@@ -1,0 +1,39 @@
+{
+  "contacts": [
+    {
+      "cleared": true,
+      "closingSpeed": 66229.90048300823,
+      "id": "tender-hulk",
+      "impactEnergy": 2412519844894.0454,
+      "impactTick": 199,
+      "minimumImpactEnergy": 1500000000000,
+      "timeOfFlightSeconds": 5970
+    }
+  ],
+  "dtConvergence": [
+    {
+      "clearedAtDt": true,
+      "clearedAtHalfDt": true,
+      "closingSpeedAtDt": 66229.90048300823,
+      "closingSpeedAtHalfDt": 66228.87610921806,
+      "id": "tender-hulk",
+      "impactTimeDifferenceSeconds": 15,
+      "impactTimeSecondsAtDt": 5970,
+      "impactTimeSecondsAtHalfDt": 5985
+    }
+  ],
+  "finalStateHash": "354ffe5f890dca4f",
+  "level": "T00-compiler-fixture",
+  "levelHash": "sha256:204e9c0ece448f975bdbf3c1ed5fb7054463b042bedae7d8268ff97314507d86",
+  "outcome": {
+    "contactsCleared": 1,
+    "contactsTotal": 1,
+    "probesGranted": 3,
+    "probesLaunched": 1,
+    "propellantRemaining": [
+      680
+    ]
+  },
+  "simVersion": 3,
+  "solutionHash": "sha256:2204394eddbe0b75cfa0de635b0d4e2d6d753c43849c4c68d99c2fe525d08220"
+}

@@ -26,11 +26,11 @@
       "Survey Tender (hulk)"
     ],
     "rails": [
-      "Sadal North Rail"
+      "Tesh Nearside Rail"
     ]
   },
   "railIds": [
-    "sadal-north"
+    "tesh-nearside"
   ],
   "scenario": {
     "bodies": [
@@ -69,9 +69,9 @@
     "contacts": [
       {
         "captureRadius": 40000,
-        "host": 2,
-        "longitude": 1.53588974175501,
-        "minimumImpactEnergy": 2400000000000
+        "host": 1,
+        "longitude": 6.056292504420323,
+        "minimumImpactEnergy": 1500000000000
       }
     ],
     "dt": 30,
@@ -84,8 +84,8 @@
     "rails": [
       {
         "headingCone": 1.2042771838760873,
-        "host": 1,
-        "longitude": 0.2181661564992912,
+        "host": 2,
+        "longitude": 3.141592653589793,
         "muzzleSpeedMax": 300000,
         "muzzleSpeedMin": 60000,
         "reloadTicks": 720
