@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { LevelSourceSchema } from './schema.ts';
 import type { LevelSource } from './schema.ts';
 import { createSim } from '../sim/sim.ts';
-import type { BodyDef, RailDef, Scenario } from '../sim/sim.ts';
+import type { BodyDef, FixedContactDef, RailDef, Scenario } from '../sim/sim.ts';
 
 const G = 6.6743e-11; // CODATA gravitational constant; mu = G * mass (ADR-0006 §2), stated once
 const TRANSFER_WINDOW_SECONDS = 40 * 86400; // ADR-0006 §6's muzzle-band warning window
@@ -21,16 +21,6 @@ export interface Issue {
   path: string;
   line: number;
   column: number;
-}
-
-/** Mirrors the sim's eventual `Scenario['contacts']` element shape. GRV-0015 (a different
- *  worktree) adds this field to `Scenario` itself; until it merges, `compile.ts` carries its own
- *  copy and strips it before handing a scenario to `createSim` -- see `buildScenario` below. */
-export interface CompiledContact {
-  host: number;
-  longitude: number;
-  captureRadius: number;
-  minimumImpactEnergy: number;
 }
 
 export interface CompiledLevel {
@@ -45,7 +35,7 @@ export interface CompiledLevel {
   railIds: string[];
   contactIds: string[];
   bodyClasses: string[];
-  scenario: Scenario & { contacts: CompiledContact[] };
+  scenario: Scenario;
 }
 
 export type CompileLevelResult =
@@ -216,7 +206,7 @@ function resolveIds(
   bodyDefs: BodyDef[];
   bodyIndex: Map<string, number>;
   railDefs: RailDef[];
-  contactDefs: CompiledContact[];
+  contactDefs: FixedContactDef[];
 } {
   const issues: Issue[] = [];
 
@@ -341,7 +331,7 @@ function resolveIds(
     else contactIndex.set(contact.id, i);
   });
 
-  const contactDefs: CompiledContact[] = [];
+  const contactDefs: FixedContactDef[] = [];
   source.contacts.forEach((contact, i) => {
     if (!bodyIndex.has(contact.host)) {
       issues.push(errorAt(positions, ['contacts', i, 'host'], `unknown body id "${contact.host}"`));
@@ -367,8 +357,8 @@ function buildScenario({
   source: LevelSource;
   bodyDefs: BodyDef[];
   railDefs: RailDef[];
-  contactDefs: CompiledContact[];
-}): Scenario & { contacts: CompiledContact[] } {
+  contactDefs: FixedContactDef[];
+}): Scenario {
   const probeSource = source.probes[0]!;
   return {
     dt: source.dt,
@@ -415,13 +405,8 @@ function compileSemantics({
 
   const scenario = buildScenario({ source, ...resolved });
 
-  // Scenario does not have `contacts` yet (GRV-0015 lands it in a different worktree): strip it
-  // before calling the real simulation, which is the simplest honest way to enforce "everything
-  // createBodyTable/createRailTable/validateScenario would reject" for everything they do know
-  // about.
-  const { contacts: _contacts, ...scenarioForSim } = scenario;
   try {
-    createSim({ scenario: scenarioForSim, seed: source.seed });
+    createSim({ scenario, seed: source.seed });
   } catch (err) {
     issues.push({
       severity: 'error',
