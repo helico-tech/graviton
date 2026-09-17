@@ -7,6 +7,7 @@ import { describe, expect, test } from 'vitest';
 import { createBodyTable, evaluateEphemeris } from '../ephemeris/bodies.ts';
 import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
 import { createHash, digest, updateFloat64, updateWord } from '../state/hash.ts';
+import { startBurn } from './burn.ts';
 import { createDynamicObjects, createStepScratch, stepTick } from './step.ts';
 import type { DynamicObjects } from './step.ts';
 
@@ -238,6 +239,44 @@ describe('surface collision', () => {
     expect(objects.y[0]).toBe(frozen.y);
     expect(objects.vx[0]).toBe(frozen.vx);
     expect(objects.vy[0]).toBe(frozen.vy);
+  });
+
+  test('a probe hit mid-burn has burning cleared the same tick the hit is recorded', () => {
+    const radius = 6.371e6;
+    const bodies = createBodyTable([{ parent: -1, mu: 3.986004418e14, radius }]);
+    const objects = createDynamicObjects(1);
+    objects.count = 1;
+    objects.x[0] = 10 * radius;
+    objects.y[0] = 0;
+    objects.vx[0] = -1e5;
+    objects.vy[0] = 0;
+    objects.hitBody[0] = -1;
+    objects.mass[0] = 1000;
+    objects.dryMass[0] = 400;
+    objects.thrust[0] = 1; // tiny: doesn't meaningfully perturb the aim
+    objects.exhaustVelocity[0] = 3000;
+    // Target far beyond what a ~2400 s run at 1 N can deliver, and a tank
+    // far from empty over the same span: the burn stays active the whole
+    // way in, so the only thing that can clear it is the collision itself.
+    startBurn({ objects, index: 0, prograde: 1_000_000, lateral: 0 });
+    const scratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+
+    let tick = 0;
+    for (; tick < 40 && objects.hitBody[0] === -1; tick++) {
+      expect(objects.burning[0]).toBe(1); // still burning right up to the hit
+      stepTick({ bodies, objects, tick, dt: DT, scratch });
+    }
+    expect(objects.hitBody[0]).toBe(0); // actually hit within the run
+    expect(objects.burning[0]).toBe(0); // cleared the same tick the hit was recorded
+
+    const frozenDelivered = objects.burnDelivered[0];
+    const frozenMass = objects.mass[0];
+    for (let k = 0; k < 5; k++, tick++) {
+      stepTick({ bodies, objects, tick, dt: DT, scratch });
+    }
+    expect(objects.burning[0]).toBe(0); // stays cleared
+    expect(objects.burnDelivered[0]).toBe(frozenDelivered); // frozen with position/velocity
+    expect(objects.mass[0]).toBe(frozenMass);
   });
 
   test('a grazing pass at 1.05 body radii is not flagged', () => {
