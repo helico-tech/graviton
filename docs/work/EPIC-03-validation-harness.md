@@ -1,6 +1,6 @@
 ---
 id: EPIC-03
-status: in-progress
+status: done
 ---
 # EPIC-03 Headless validation harness
 
