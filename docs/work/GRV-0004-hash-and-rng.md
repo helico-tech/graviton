@@ -1,7 +1,7 @@
 ---
 id: GRV-0004
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0004 State hash and named random streams
 
@@ -18,3 +18,8 @@ raw double bits and seeded named random streams (ADR-0005 "Hash", "Randomness").
   different names are independent; a stream restored from its four words continues identically.
 
 **Verification.** `pnpm check`.
+
+**Delivered.** `src/sim/state/hash.ts` (incremental `createHash`/`updateFloat64`/
+`updateFloat64Array`/`updateWord`/`digest`) and `src/sim/state/rng.ts`
+(`createStream`/`drawU32`/`drawUnit`), tests beside them. Evidence and golden
+derivation in `docs/evidence/GRV-0004/README.md`.
