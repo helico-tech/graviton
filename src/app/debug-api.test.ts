@@ -86,7 +86,7 @@ describe('createDebugSession', () => {
     const hashBefore = session.hash();
 
     const otherLog: Command[] = [
-      { tick: 0, kind: 'launch', body: 0, heading: 16384, speed: 5_000_000 },
+      { tick: 0, kind: 'launch', body: 0, heading: 16384 * 65536, speed: 5_000_000 },
     ];
     const result = session.run({ scenario: scenario(), seed: 2, log: otherLog, ticks: 30 });
 

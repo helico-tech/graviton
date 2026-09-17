@@ -8,9 +8,13 @@ import { dcosOut, dsincos, dsinOut } from './math/kernels.ts';
 import { evaluateEphemeris } from './ephemeris/bodies.ts';
 import type { Sim } from './sim.ts';
 
-/** 1/65536 of a turn, so the full range is < 2*pi and stays inside dsincos's
- *  contractual domain (research §2.2) with no reduction needed. */
-export const HEADING_TURN = 65536;
+/** 1/2^32 of a turn (ADR-0006 §4, superseding the 1/65536 unit ADR-0005
+ *  originally chose -- docs/issues/2026-09-17-heading-quantum-too-coarse-
+ *  for-intercepts.md measured the old quantum's miss against a capture
+ *  radius of tens of kilometres). The full range is still < 2*pi and stays
+ *  inside dsincos's contractual domain (research §2.2) with no reduction
+ *  needed. */
+export const HEADING_TURN = 4294967296;
 const TWO_PI = 6.283185307179586;
 const MM_PER_M = 1000;
 /** How far above a body's surface a launched probe starts, m -- placeholder
@@ -22,7 +26,7 @@ export interface LaunchCommand {
   kind: 'launch';
   /** Body index to launch from. */
   body: number;
-  /** 0..65535, 1/65536 of a turn. */
+  /** 0..4294967295 (2^32 - 1), 1/2^32 of a turn. */
   heading: number;
   /** mm/s, relative to the launch body. */
   speed: number;

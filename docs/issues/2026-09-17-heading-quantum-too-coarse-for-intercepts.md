@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-17
 filed-by: agent
@@ -16,3 +16,5 @@ with a free-flight leg is solvable. ADR-0006 moves heading to 1/2^32 turn. P1 be
 level depends on it.
 
 ## Resolution
+
+**Resolved 2026-09-17** in GRV-0013, commit ac64c47. HEADING_TURN moved from 65536 to 2^32 (src/sim/commands.ts); the angle formula is unchanged, so a heading that is a multiple of the old quantum still gives the bit-identical direction. Measured on a plain two-body coast: adjacent new-unit headings miss by 278 m, one old quantum apart misses by 18 196 km. See docs/evidence/GRV-0013/README.md.
