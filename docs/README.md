@@ -37,3 +37,25 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 are the deterministic tools the working agreements require; run them with
 plain `node` (Node 24 strips types). Work item IDs are `GRV-NNNN`; epics are
 `EPIC-NN`.
+
+## Proving a change
+
+`adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;
+this is the day-to-day recipe.
+
+- `pnpm e2e` builds `dist/` and runs `tests/e2e/**/*.spec.ts` against it in
+  real Chromium and Firefox (`playwright.config.ts`). Every spec is gated by
+  `tests/e2e/console-gate.ts` (ADR-0004 §4) — console error/warning,
+  `pageerror`, a failed request, an HTTP status ≥ 400, or a dialog fails the
+  test.
+- `pnpm screenshot [--url <u>] [--out <png>] [--expect-build <sha>] [--debug]`
+  drives a real page with Playwright and the same gate (`scripts/lib/
+  console-gate.ts`), writes a PNG, and exits non-zero on a gate violation or
+  a build-SHA mismatch — the tool behind both per-unit evidence and the
+  live-site deploy proof. `--url` points it at any origin, including the
+  Pages site; without it, it serves the built `dist/` itself.
+- A unit that changes anything user-visible ships `docs/evidence/<ID>/`:
+  before/after screenshots of the same scenario (both read by whoever proves
+  the change), the commands run, and the real output. `pnpm screenshot`
+  writes the PNGs; `pnpm docs:validate` enforces the folder shape (README
+  present, files ≤ 400 KB, folder name matches a work item).
