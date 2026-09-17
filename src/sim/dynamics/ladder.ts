@@ -11,6 +11,7 @@
 // same probe integrated alone and integrated in a crowd take identical
 // substeps (research §4.3, the ghost invariant).
 
+import { dexp } from '../math/kernels.ts';
 import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
 
 export const ETA = 0.05;
@@ -51,6 +52,19 @@ function crossingLevel(dt: number, vRel: number, zetaR: number): number {
   return L;
 }
 
+/** Smallest L with dt/2^L <= tBurnRemaining: guarantees at least one substep
+ *  entirely inside an active burn (research §3.6's "burn ladder term").
+ *  Same halving loop as crossingLevel. */
+function burnLevel(dt: number, tBurnRemaining: number): number {
+  let s = dt;
+  let L = 0;
+  while (L < L_MAX && s > tBurnRemaining) {
+    s *= 0.5;
+    L++;
+  }
+  return L;
+}
+
 export interface SubstepLevelArgs {
   bodies: BodyTable;
   kDyn: Float64Array;
@@ -62,11 +76,38 @@ export interface SubstepLevelArgs {
   /** Bodies' state at the tick's start time: the level is chosen from
    *  state at the tick's start (research §4.9). */
   eph: EphemerisOut;
+  /** Burn state, from this object alone (research §3.6's burn ladder term;
+   *  ghost isolation requires the level come only from the object's own
+   *  state, never from other objects in its group). Optional: callers with
+   *  no burn concept (or a non-burning object) can omit all of these and
+   *  get the dynamical/crossing level alone. */
+  burning?: number;
+  mass?: number;
+  thrust?: number;
+  exhaustVelocity?: number;
+  burnTarget?: number;
+  burnDelivered?: number;
 }
 
 /** The substep level for one object: the max over bodies of the dynamical
- *  and crossing ladders (research §4.2). */
-export function substepLevel({ bodies, kDyn, dt, x, y, vx, vy, eph }: SubstepLevelArgs): number {
+ *  and crossing ladders, plus the burn term while a burn is active
+ *  (research §4.2, §3.6). */
+export function substepLevel({
+  bodies,
+  kDyn,
+  dt,
+  x,
+  y,
+  vx,
+  vy,
+  eph,
+  burning = 0,
+  mass = 0,
+  thrust = 0,
+  exhaustVelocity = 0,
+  burnTarget = 0,
+  burnDelivered = 0,
+}: SubstepLevelArgs): number {
   let L = 0;
   for (let b = 0; b < bodies.count; b++) {
     const dx = x - eph.x[b]!;
@@ -85,6 +126,14 @@ export function substepLevel({ bodies, kDyn, dt, x, y, vx, vy, eph }: SubstepLev
 
     const l = l1 > l2 ? l1 : l2;
     if (l > L) L = l;
+  }
+
+  if (burning) {
+    const mdot = thrust / exhaustVelocity;
+    const rem = burnTarget - burnDelivered;
+    const tBurnRemaining = (mass / mdot) * (1 - dexp(-rem / exhaustVelocity));
+    const lBurn = burnLevel(dt, tBurnRemaining);
+    if (lBurn > L) L = lBurn;
   }
   return L;
 }

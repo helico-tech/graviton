@@ -1,7 +1,7 @@
 ---
 id: GRV-0007
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0007 Finite burns with mass depletion
 
@@ -26,3 +26,10 @@ inside the PEFRL kicks (ADR-0005 "Burns", research §3.5-3.6).
   alone and in a crowd stays bit-identical.
 
 **Verification.** `pnpm check`.
+
+**Delivered.** `burn.ts` (`startBurn`) plus a burning kick term in `pefrl.ts` and a burn
+ladder term in `ladder.ts`; `pnpm check` and `pnpm docs:validate` green. Delivered delta-v and
+final mass measured to 1e-13 / 2e-16 relative (both comfortably inside 1e-9) across
+0.5-5000 m/s and the tank-limited case; see docs/evidence/GRV-0007/README.md for the port
+derivation, the measured table and one deviation from the reference pseudocode found while
+porting (signed vs. abs(hk) mass/accumulator bookkeeping through PEFRL's negative kicks).
