@@ -1,7 +1,7 @@
 ---
 id: GRV-0017
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0017 Level verifier and evidence report
 
@@ -29,3 +29,10 @@ status: todo
   path is exercised before the first campaign level exists.
 
 **Verification.** `pnpm check`, `pnpm levels:verify`.
+
+**Delivered.** `src/levels/verify.ts` (pure `verifyLevel`, plus the dt/2 derivation and
+comparison as separately tested functions), `scripts/levels-verify.ts` (`pnpm levels:verify`,
+wired into `pnpm check`), the fixture reworked so its rail can reach its contact (rail on the
+moon `tesh`, contact on the planet `sadal` -- the reverse pairing turned out unsolvable, see
+below), `levels/T00-compiler-fixture.solution.json` and its generated `.evidence.json`. See
+`docs/evidence/GRV-0017/README.md` for output, the solved launch, and a sample FAILED run.
