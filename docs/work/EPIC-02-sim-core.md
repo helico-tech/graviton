@@ -1,6 +1,6 @@
 ---
 id: EPIC-02
-status: in-progress
+status: done
 ---
 # EPIC-02 Simulation core
 

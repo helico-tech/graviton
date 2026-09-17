@@ -21,7 +21,8 @@
     "prepare": "git config core.hooksPath scripts/git-hooks",
     "docs:validate": "node scripts/validate-docs.ts",
     "work:new": "node scripts/new-work-item.ts",
-    "issue": "node scripts/issues.ts"
+    "issue": "node scripts/issues.ts",
+    "headless": "node src/headless/run.ts"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "5.3.0",

@@ -1,8 +1,9 @@
 ---
-status: open
+status: resolved
 priority: P3
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0008
 ---
 # Burn ladder term uses target-only t_burn_remaining, ignoring tank exhaustion
 
@@ -24,3 +25,5 @@ explicitly without a dry-mass term, and no acceptance criterion exercises the
 gap.
 
 ## Resolution
+
+**Resolved 2026-09-17** in GRV-0008, commit 57155a4. Fixed: substepLevel's burn term now takes an optional dryMass and uses min(t_target_remaining, (m - dryMass)/mdot); stepTick passes objects.dryMass[i] through. Failing test first in ladder.test.ts (tank with 3 kg left goes from level 0 to level 2 under dt=60s).
