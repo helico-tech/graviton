@@ -8,7 +8,9 @@ import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
 import { computeKDyn, L_MAX, substepLevel, ZETA } from './ladder.ts';
 
 function singleBody(mu: number): { bodies: BodyTable; eph: EphemerisOut } {
-  const bodies = createBodyTable([{ parent: -1, mu, radius: 1 }]);
+  const bodies = createBodyTable([
+    { parent: -1, mu, radius: 1, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+  ]);
   const eph: EphemerisOut = {
     x: new Float64Array(1),
     y: new Float64Array(1),
@@ -83,8 +85,18 @@ describe('crossing ladder', () => {
     const MU_EARTH = 3.986004418e14;
     const AU = 1.495978707e11;
     const bodies = createBodyTable([
-      { parent: -1, mu: MU_SUN, radius: 6.957e8 },
-      { parent: 0, mu: MU_EARTH, radius: 6.371e6, a: AU, e: 0, argPeriapsis: 0, meanAnomaly0: 0 },
+      { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
+      {
+        parent: 0,
+        mu: MU_EARTH,
+        radius: 6.371e6,
+        a: AU,
+        e: 0,
+        argPeriapsis: 0,
+        meanAnomaly0: 0,
+        rotationPeriod: 86400,
+        axialPhaseAtEpoch: 0,
+      },
     ]);
     const eph: EphemerisOut = {
       x: new Float64Array(2),

@@ -29,7 +29,7 @@ function makeEph(count: number): EphemerisOut {
 
 function sunJupiter(): BodyTable {
   return createBodyTable([
-    { parent: -1, mu: MU_SUN, radius: 6.957e8 },
+    { parent: -1, mu: MU_SUN, radius: 6.957e8, rotationPeriod: 2.2e6, axialPhaseAtEpoch: 0 },
     {
       parent: 0,
       mu: MU_JUPITER,
@@ -38,6 +38,8 @@ function sunJupiter(): BodyTable {
       e: 0.0489,
       argPeriapsis: 0.257,
       meanAnomaly0: 0.6,
+      rotationPeriod: 35730,
+      axialPhaseAtEpoch: 0,
     },
   ]);
 }
@@ -215,7 +217,9 @@ function tAtR(mu: number, rp: number, vinf: number, r: number): number {
 describe('surface collision', () => {
   test('an object aimed at a body is flagged with the right body index and freezes', () => {
     const radius = 6.371e6;
-    const bodies = createBodyTable([{ parent: -1, mu: 3.986004418e14, radius }]);
+    const bodies = createBodyTable([
+      { parent: -1, mu: 3.986004418e14, radius, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+    ]);
     const objects = createDynamicObjects(1);
     objects.count = 1;
     objects.x[0] = 10 * radius;
@@ -243,7 +247,9 @@ describe('surface collision', () => {
 
   test('a probe hit mid-burn has burning cleared the same tick the hit is recorded', () => {
     const radius = 6.371e6;
-    const bodies = createBodyTable([{ parent: -1, mu: 3.986004418e14, radius }]);
+    const bodies = createBodyTable([
+      { parent: -1, mu: 3.986004418e14, radius, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+    ]);
     const objects = createDynamicObjects(1);
     objects.count = 1;
     objects.x[0] = 10 * radius;
@@ -282,7 +288,9 @@ describe('surface collision', () => {
   test('a grazing pass at 1.05 body radii is not flagged', () => {
     const mu = 3.986004418e14;
     const radius = 6.371e6;
-    const bodies = createBodyTable([{ parent: -1, mu, radius }]);
+    const bodies = createBodyTable([
+      { parent: -1, mu, radius, rotationPeriod: 86400, axialPhaseAtEpoch: 0 },
+    ]);
     const rp = 1.05 * radius;
     const vinf = 1e5;
 

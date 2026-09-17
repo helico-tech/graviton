@@ -14,11 +14,13 @@ import { createHash, digest, updateFloat64, updateWord } from './state/hash.ts';
 import { selfCheck } from './selfcheck.ts';
 import { applyCommand } from './commands.ts';
 import type { Command } from './commands.ts';
+import { createRailTable, NEVER_LAUNCHED } from './rails.ts';
+import type { RailDef, RailTable } from './rails.ts';
 import { SIM_VERSION } from './version.ts';
 
 // Re-exported so callers building a Scenario only need to import from
-// sim.ts, not reach into ephemeris/bodies.ts directly.
-export type { BodyDef };
+// sim.ts, not reach into ephemeris/bodies.ts or rails.ts directly.
+export type { BodyDef, RailDef };
 
 export interface ProbeDef {
   dryMass: number;
@@ -38,6 +40,7 @@ export interface Scenario {
    *  count. */
   burnNodeCapacity: number;
   bodies: BodyDef[];
+  rails: RailDef[];
   probe: ProbeDef;
   /** Named random streams to create, e.g. ['debris_ejection']. Order fixes
    *  both creation and serialisation order. */
@@ -67,6 +70,9 @@ export interface Sim {
   tick: number;
   seed: number;
   bodies: BodyTable;
+  /** Derived from `scenario.rails` alone -- NOT part of hashSim/serializeSim
+   *  (mirrors `bodies`); `railLastLaunchTick` below is the mutable state. */
+  rails: RailTable;
   objects: DynamicObjects;
   /** Derived from `scenario` alone -- NOT part of hashSim/serializeSim,
    *  rebuilt by deserializeSim (research §8.3). */
@@ -74,6 +80,10 @@ export interface Sim {
   /** One row per `scenario.streams` entry, same order. */
   streams: Uint32Array[];
   pending: PendingBurnNodes;
+  /** Tick of each rail's last launch, NEVER_LAUNCHED (-1) until it has
+   *  fired (docs/work/GRV-0014). One entry per `scenario.rails`, same
+   *  order. Mutable Sim state: hashed and serialised. */
+  railLastLaunchTick: Int32Array;
 }
 
 /** Mirrors createBodyTable's validation style (body validation itself stays
@@ -126,15 +136,18 @@ export function createSim({ scenario, seed }: { scenario: Scenario; seed: number
   selfCheck();
   validateScenario(scenario);
   const bodies = createBodyTable(scenario.bodies);
+  const rails = createRailTable(scenario.rails, bodies);
   return {
     scenario,
     tick: 0,
     seed,
     bodies,
+    rails,
     objects: createDynamicObjects(scenario.capacity),
     scratch: createStepScratch({ bodies, dt: scenario.dt, capacity: scenario.capacity }),
     streams: scenario.streams.map((name) => createStream({ seed, name })),
     pending: createPendingBurnNodes(scenario.burnNodeCapacity),
+    railLastLaunchTick: new Int32Array(rails.count).fill(NEVER_LAUNCHED),
   };
 }
 
@@ -244,8 +257,9 @@ export function advance({ sim, log, ticks }: AdvanceArgs): void {
 }
 
 /** Hex digest over tick, seed, count, every live object array prefix
- *  (including hitBody/burning as words), pending nodes, and stream words.
- *  Derived scratch is excluded. */
+ *  (including hitBody/burning as words), pending nodes, rail last-launch
+ *  ticks, and stream words. Derived scratch, bodies and rails (the static
+ *  tables) are excluded. */
 export function hashSim(sim: Sim): string {
   const state = createHash();
   updateWord(state, sim.tick);
@@ -278,6 +292,10 @@ export function hashSim(sim: Sim): string {
     updateWord(state, sim.pending.lateral[i]!);
   }
 
+  for (let i = 0; i < sim.rails.count; i++) {
+    updateWord(state, sim.railLastLaunchTick[i]!);
+  }
+
   for (const stream of sim.streams) {
     updateWord(state, stream[0]!);
     updateWord(state, stream[1]!);
@@ -288,7 +306,8 @@ export function hashSim(sim: Sim): string {
   return digest(state);
 }
 
-const FORMAT_VERSION = 1;
+// GRV-0014 adds a rail-state record (railLastLaunchTick) to the layout.
+const FORMAT_VERSION = 2;
 const HEADER_BYTES = 4 + 4; // formatVersion, simVersion
 const BODY_HEADER_BYTES = 4 + 4 + 4; // tick, seed, count
 // x y vx vy mass dryMass thrust exhaustVelocity burnNx burnNy burnTarget
@@ -297,15 +316,18 @@ const BODY_HEADER_BYTES = 4 + 4 + 4; // tick, seed, count
 // reason to bit-pack it).
 const OBJECT_RECORD_BYTES = 12 * 8 + 4 + 4;
 const PENDING_RECORD_BYTES = 4 * 4; // object, atTick, prograde, lateral
+const RAIL_RECORD_BYTES = 4; // lastLaunchTick (int32)
 const STREAM_RECORD_BYTES = 4 * 4; // four uint32 words
 
 /** `Uint8Array` (binary, doubles as raw bits): a little header (format
  *  version, SIM_VERSION), then tick/seed/count, then the live object
- *  prefix, pending nodes and stream words -- the same fields hashSim reads,
- *  in the same order. No TextEncoder, no platform globals: DataView and
- *  typed arrays only (ADR-0002). `scenario` and `scratch` are not written;
- *  deserializeSim rebuilds them from the scenario it is given (research
- *  §8.3: nothing derived belongs in the state). */
+ *  prefix, pending nodes, rail last-launch ticks and stream words -- the
+ *  same fields hashSim reads, in the same order. No TextEncoder, no
+ *  platform globals: DataView and typed arrays only (ADR-0002). `scenario`
+ *  and `scratch` are not written; deserializeSim rebuilds them from the
+ *  scenario it is given (research §8.3: nothing derived belongs in the
+ *  state). Rail count is not stored either -- like `streams.length`, it is
+ *  fixed by `scenario.rails` and deserializeSim reads exactly that many. */
 export function serializeSim(sim: Sim): Uint8Array {
   const o = sim.objects;
   const byteLength =
@@ -314,6 +336,7 @@ export function serializeSim(sim: Sim): Uint8Array {
     o.count * OBJECT_RECORD_BYTES +
     4 +
     sim.pending.count * PENDING_RECORD_BYTES +
+    sim.rails.count * RAIL_RECORD_BYTES +
     sim.streams.length * STREAM_RECORD_BYTES;
 
   const buffer = new ArrayBuffer(byteLength);
@@ -361,6 +384,10 @@ export function serializeSim(sim: Sim): Uint8Array {
     putI32(sim.pending.atTick[i]!);
     putI32(sim.pending.prograde[i]!);
     putI32(sim.pending.lateral[i]!);
+  }
+
+  for (let i = 0; i < sim.rails.count; i++) {
+    putI32(sim.railLastLaunchTick[i]!);
   }
 
   for (const stream of sim.streams) {
@@ -414,6 +441,7 @@ export function deserializeSim({
     throw new Error(`deserializeSim: object count ${count} exceeds capacity ${scenario.capacity}`);
 
   const bodies = createBodyTable(scenario.bodies);
+  const rails = createRailTable(scenario.rails, bodies);
   const objects = createDynamicObjects(scenario.capacity);
   objects.count = count;
   for (let i = 0; i < count; i++) {
@@ -447,6 +475,9 @@ export function deserializeSim({
     pending.lateral[i] = getI32();
   }
 
+  const railLastLaunchTick = new Int32Array(rails.count);
+  for (let i = 0; i < rails.count; i++) railLastLaunchTick[i] = getI32();
+
   const streams: Uint32Array[] = [];
   for (let s = 0; s < scenario.streams.length; s++) {
     const stream = new Uint32Array(4);
@@ -462,12 +493,15 @@ export function deserializeSim({
     tick,
     seed,
     bodies,
+    rails,
     objects,
     scratch: createStepScratch({ bodies, dt: scenario.dt, capacity: scenario.capacity }),
     streams,
     pending,
+    railLastLaunchTick,
   };
 }
 
-export type { Command } from './commands.ts';
+export type { Command, LaunchRejection } from './commands.ts';
+export { checkLaunch } from './commands.ts';
 export type { EphemerisOut };

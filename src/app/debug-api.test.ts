@@ -15,7 +15,17 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
     dt: DT,
     capacity: 4,
     burnNodeCapacity: 4,
-    bodies: [{ parent: -1, mu: MU, radius: RADIUS }],
+    bodies: [{ parent: -1, mu: MU, radius: RADIUS, rotationPeriod: 1e9, axialPhaseAtEpoch: 0 }],
+    rails: [
+      {
+        host: 0,
+        longitude: 0,
+        muzzleSpeedMin: 1,
+        muzzleSpeedMax: 1_000_000,
+        headingCone: Math.PI,
+        reloadTicks: 0,
+      },
+    ],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection'],
     ...overrides,
@@ -25,7 +35,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
 function launchCommand(
   overrides: Partial<{ tick: number; heading: number; speed: number }> = {},
 ): Command {
-  return { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 8_000_000, ...overrides };
+  return { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 8_000_000, ...overrides };
 }
 
 function burnCommand(
@@ -86,7 +96,7 @@ describe('createDebugSession', () => {
     const hashBefore = session.hash();
 
     const otherLog: Command[] = [
-      { tick: 0, kind: 'launch', body: 0, heading: 16384 * 65536, speed: 5_000_000 },
+      { tick: 0, kind: 'launch', rail: 0, heading: 16384 * 65536, speed: 5_000_000 },
     ];
     const result = session.run({ scenario: scenario(), seed: 2, log: otherLog, ticks: 30 });
 
