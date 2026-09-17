@@ -4,6 +4,9 @@
 // playwright.config.ts's webServer. Uses the shared console gate (GRV-0012)
 // with failOnAnyConsoleMessage, matching this spec's original inline gate
 // that failed on every console message, not just errors and warnings.
+//
+// GRV-0015: every golden in tests/golden/ is replayed, not just
+// flyby-burn.json -- a loop over the directory listing, not a hardcoded name.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +15,7 @@ import type { Command, Scenario } from '../../src/sim/sim.ts';
 import { attachConsoleGate } from './console-gate.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const GOLDEN_PATH = path.join(here, '../../tests/golden/flyby-burn.json');
+const GOLDEN_DIR = path.join(here, '../../tests/golden');
 
 interface GoldenFile {
   scenario: Scenario;
@@ -23,8 +26,12 @@ interface GoldenFile {
   simVersion: number;
 }
 
-function readGolden(): GoldenFile {
-  return JSON.parse(fs.readFileSync(GOLDEN_PATH, 'utf8')) as GoldenFile;
+function goldenNames(): string[] {
+  return fs.readdirSync(GOLDEN_DIR).filter((name) => name.endsWith('.json'));
+}
+
+function readGolden(name: string): GoldenFile {
+  return JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, name), 'utf8')) as GoldenFile;
 }
 
 /** Splits `totalTicks` into several unequal, positive batches summing to the
@@ -36,51 +43,55 @@ function unevenBatches(totalTicks: number): number[] {
   return batches;
 }
 
-test('run() replays the golden log and matches the Node hash', async ({ page }) => {
-  const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
-  const golden = readGolden();
+for (const name of goldenNames()) {
+  test.describe(`golden: ${name}`, () => {
+    test('run() replays the golden log and matches the Node hash', async ({ page }) => {
+      const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
+      const golden = readGolden(name);
 
-  await page.goto('/?debug=1');
-  await page.waitForFunction(() => window.graviton?.ready === true);
+      await page.goto('/?debug=1');
+      await page.waitForFunction(() => window.graviton?.ready === true);
 
-  const result = await page.evaluate(
-    (args: { scenario: Scenario; seed: number; log: Command[]; ticks: number }) =>
-      window.graviton!.run(args),
-    { scenario: golden.scenario, seed: golden.seed, log: golden.log, ticks: golden.ticks },
-  );
-  const version = await page.evaluate(() => window.graviton!.version);
+      const result = await page.evaluate(
+        (args: { scenario: Scenario; seed: number; log: Command[]; ticks: number }) =>
+          window.graviton!.run(args),
+        { scenario: golden.scenario, seed: golden.seed, log: golden.log, ticks: golden.ticks },
+      );
+      const version = await page.evaluate(() => window.graviton!.version);
 
-  expect(result.hash).toBe(golden.expectedHash);
-  expect(result.tick).toBe(golden.ticks);
-  expect(version.sim).toBe(golden.simVersion);
-  expect(gate.violations()).toEqual([]);
-});
+      expect(result.hash).toBe(golden.expectedHash);
+      expect(result.tick).toBe(golden.ticks);
+      expect(version.sim).toBe(golden.simVersion);
+      expect(gate.violations()).toEqual([]);
+    });
 
-test('load/command/step in uneven batches replays the same golden log to the same hash', async ({
-  page,
-}) => {
-  const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
-  const golden = readGolden();
+    test('load/command/step in uneven batches replays the same golden log to the same hash', async ({
+      page,
+    }) => {
+      const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
+      const golden = readGolden(name);
 
-  await page.goto('/?debug=1');
-  await page.waitForFunction(() => window.graviton?.ready === true);
+      await page.goto('/?debug=1');
+      await page.waitForFunction(() => window.graviton?.ready === true);
 
-  await page.evaluate((args: { scenario: Scenario; seed: number }) => window.graviton!.load(args), {
-    scenario: golden.scenario,
-    seed: golden.seed,
+      await page.evaluate(
+        (args: { scenario: Scenario; seed: number }) => window.graviton!.load(args),
+        { scenario: golden.scenario, seed: golden.seed },
+      );
+      for (const command of golden.log) {
+        await page.evaluate((cmd: Command) => window.graviton!.command(cmd), command);
+      }
+      for (const ticks of unevenBatches(golden.ticks)) {
+        await page.evaluate((batch: number) => window.graviton!.step(batch), ticks);
+      }
+
+      const hash = await page.evaluate(() => window.graviton!.hash());
+
+      expect(hash).toBe(golden.expectedHash);
+      expect(gate.violations()).toEqual([]);
+    });
   });
-  for (const command of golden.log) {
-    await page.evaluate((cmd: Command) => window.graviton!.command(cmd), command);
-  }
-  for (const ticks of unevenBatches(golden.ticks)) {
-    await page.evaluate((batch: number) => window.graviton!.step(batch), ticks);
-  }
-
-  const hash = await page.evaluate(() => window.graviton!.hash());
-
-  expect(hash).toBe(golden.expectedHash);
-  expect(gate.violations()).toEqual([]);
-});
+}
 
 test('window.graviton is not installed without ?debug=1', async ({ page }) => {
   const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });

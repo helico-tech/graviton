@@ -21,13 +21,22 @@ export interface ObjectSnapshot {
   vy: number;
   mass: number;
   hitBody: number;
+  hitContact: number;
   burning: number;
+}
+
+export interface ContactSnapshot {
+  cleared: number;
+  impactTick: number;
+  impactSpeed: number;
+  impactEnergy: number;
 }
 
 export interface StateSnapshot {
   tick: number;
   count: number;
   objects: ObjectSnapshot[];
+  contacts: ContactSnapshot[];
 }
 
 export interface LoadArgs {
@@ -65,9 +74,10 @@ export interface DebugSession {
   run(args: RunArgs): RunResult;
 }
 
-/** Plain-number copy of the live object arrays: primitives, not references,
- *  so the result can't alias `sim.objects` and a fresh array is built on
- *  every call (research §4: `state()` is read-only). */
+/** Plain-number copy of the live object and contact-state arrays: primitives,
+ *  not references, so the result can't alias `sim.objects`/`sim.contactState`
+ *  and a fresh array is built on every call (research §4: `state()` is
+ *  read-only). */
 function snapshot(sim: Sim): StateSnapshot {
   const o = sim.objects;
   const objects: ObjectSnapshot[] = [];
@@ -79,10 +89,23 @@ function snapshot(sim: Sim): StateSnapshot {
       vy: o.vy[i]!,
       mass: o.mass[i]!,
       hitBody: o.hitBody[i]!,
+      hitContact: o.hitContact[i]!,
       burning: o.burning[i]!,
     });
   }
-  return { tick: sim.tick, count: o.count, objects };
+
+  const cs = sim.contactState;
+  const contacts: ContactSnapshot[] = [];
+  for (let i = 0; i < sim.contacts.count; i++) {
+    contacts.push({
+      cleared: cs.cleared[i]!,
+      impactTick: cs.impactTick[i]!,
+      impactSpeed: cs.impactSpeed[i]!,
+      impactEnergy: cs.impactEnergy[i]!,
+    });
+  }
+
+  return { tick: sim.tick, count: o.count, objects, contacts };
 }
 
 export function createDebugSession(): DebugSession {

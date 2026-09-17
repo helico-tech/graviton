@@ -26,6 +26,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
         reloadTicks: 0,
       },
     ],
+    contacts: [],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection'],
     ...overrides,
@@ -85,6 +86,22 @@ describe('createDebugSession', () => {
 
     expect(after.tick).toBe(1);
     expect(after.objects[0]!.x).not.toBe(-1);
+  });
+
+  test('state() reports one contacts entry per scenario contact, read-only', () => {
+    const withContact = scenario({
+      contacts: [{ host: 0, longitude: 0, captureRadius: 40000, minimumImpactEnergy: 1e12 }],
+    });
+    const session = createDebugSession();
+    const loaded = session.load({ scenario: withContact, seed: 1 });
+
+    expect(loaded.contacts).toEqual([
+      { cleared: 0, impactTick: -1, impactSpeed: 0, impactEnergy: 0 },
+    ]);
+
+    loaded.contacts[0]!.cleared = 1; // mutate the returned snapshot
+    const after = session.state();
+    expect(after.contacts[0]!.cleared).toBe(0);
   });
 
   test('run() reports a fresh, independent sim without disturbing the loaded session', () => {

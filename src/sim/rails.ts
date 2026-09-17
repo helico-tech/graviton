@@ -93,38 +93,43 @@ export function createRailTable(defs: RailDef[], bodies: BodyTable): RailTable {
   return table;
 }
 
-export interface RailGeometry {
+export interface SurfacePoint {
   x: number;
   y: number;
   vx: number;
   vy: number;
-  /** Local vertical unit vector at the rail (the cone test's reference
+  /** Local vertical unit vector at the point (the cone test's reference
    *  direction). */
   ux: number;
   uy: number;
 }
 
-/** Position and host-plus-rotation velocity of a rail's muzzle at time `t`
- *  (GAME-0001 §4.2): exactly on the host's surface, at the host's own
- *  velocity plus the surface's own rotation velocity. The muzzle term
- *  (`speed` along the command's own heading) is not included here -- it is
- *  the one term that is not purely geometric, and is the caller's to add.
- *  `eph` must already hold the host's ephemeris state at `t`. */
-export function railGeometry({
+/** A rail's muzzle geometry is exactly a host surface point -- kept as its
+ *  own name since `RailGeometry` is the public shape callers (commands.ts)
+ *  already destructure against. */
+export type RailGeometry = SurfacePoint;
+
+/** Position and host-plus-rotation velocity of a point at longitude
+ *  `longitude` on `host`'s equator at time `t` (GAME-0001 §4.2): exactly on
+ *  the surface, at the host's own velocity plus the surface's own rotation
+ *  velocity. Shared by rails (railGeometry below adds the muzzle term, the
+ *  one term that is not purely geometric) and fixed contacts (contacts.ts:
+ *  this alone is a contact's whole kinematics, GAME-0001 §4.8). `eph` must
+ *  already hold the host's ephemeris state at `t`. */
+export function surfacePoint({
   bodies,
-  rails,
-  rail,
+  host,
+  longitude,
   t,
   eph,
 }: {
   bodies: BodyTable;
-  rails: RailTable;
-  rail: number;
+  host: number;
+  longitude: number;
   t: number;
   eph: EphemerisOut;
-}): RailGeometry {
-  const host = rails.host[rail]!;
-  const phi = surfacePhase(bodies, host, t) + rails.longitude[rail]!;
+}): SurfacePoint {
+  const phi = surfacePhase(bodies, host, t) + longitude;
   dsincos(phi);
   const ux = dcosOut;
   const uy = dsinOut;
@@ -139,4 +144,28 @@ export function railGeometry({
     ux,
     uy,
   };
+}
+
+/** A rail's muzzle point: exactly its host surface point at the rail's own
+ *  longitude (surfacePoint above). */
+export function railGeometry({
+  bodies,
+  rails,
+  rail,
+  t,
+  eph,
+}: {
+  bodies: BodyTable;
+  rails: RailTable;
+  rail: number;
+  t: number;
+  eph: EphemerisOut;
+}): RailGeometry {
+  return surfacePoint({
+    bodies,
+    host: rails.host[rail]!,
+    longitude: rails.longitude[rail]!,
+    t,
+    eph,
+  });
 }

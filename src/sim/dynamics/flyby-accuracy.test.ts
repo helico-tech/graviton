@@ -4,7 +4,16 @@
 // fine here -- tests are exempt from src/sim's determinism lint (ADR-0002).
 import { describe, expect, test } from 'vitest';
 import { createBodyTable } from '../ephemeris/bodies.ts';
+import { createContactState, createContactTable } from '../contacts.ts';
 import { createDynamicObjects, createStepScratch, stepTick } from './step.ts';
+
+// GRV-0015: this file predates fixed contacts and stays contact-free; the
+// empty table needs no bodies of its own to validate against.
+const NO_CONTACTS = createContactTable(
+  [],
+  createBodyTable([{ parent: -1, mu: 1, radius: 1, rotationPeriod: 1, axialPhaseAtEpoch: 0 }]),
+);
+const NO_CONTACT_STATE = createContactState(0);
 
 const DAY = 86400;
 const DOWNSTREAM = 10 * DAY;
@@ -86,10 +95,18 @@ function runFlyby({
   objects.vx[0] = init.vx;
   objects.vy[0] = init.vy;
   objects.hitBody[0] = -1;
-  const scratch = createStepScratch({ bodies, dt, capacity: 1 });
+  const scratch = createStepScratch({ bodies, contacts: NO_CONTACTS, dt, capacity: 1 });
 
   for (let tick = 0; tick < nTicks; tick++) {
-    stepTick({ bodies, objects, tick, dt, scratch });
+    stepTick({
+      bodies,
+      objects,
+      contacts: NO_CONTACTS,
+      contactState: NO_CONTACT_STATE,
+      tick,
+      dt,
+      scratch,
+    });
   }
   expect(objects.hitBody[0]).toBe(-1); // a 1.05-radius grazing pass must never register a hit
 
