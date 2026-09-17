@@ -8,3 +8,5 @@ runs/
 tests/golden/
 test-results/
 playwright-report/
+levels/*.level.json
+levels/schema/

@@ -1,0 +1,429 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "bodies": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "axialPhaseAtEpoch": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "class": {
+            "enum": [
+              "star",
+              "rock",
+              "ice",
+              "gas",
+              "molten",
+              "metal"
+            ],
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mass": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "orbit": {
+            "additionalProperties": false,
+            "properties": {
+              "a": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "argPeriapsis": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "e": {
+                "maximum": 0.8,
+                "minimum": 0,
+                "type": "number"
+              },
+              "meanAnomalyAtEpoch": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "parent": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "parent",
+              "a",
+              "e",
+              "argPeriapsis",
+              "meanAnomalyAtEpoch"
+            ],
+            "type": "object"
+          },
+          "radius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "rotationPeriod": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "class",
+          "mass",
+          "radius",
+          "rotationPeriod",
+          "axialPhaseAtEpoch"
+        ],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "brief": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "contacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "captureRadius": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "clearedBy": {
+            "additionalProperties": false,
+            "properties": {
+              "minimumImpactEnergy": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "minimumImpactEnergy"
+            ],
+            "type": "object"
+          },
+          "host": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "const": "fixed"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "host",
+          "longitude",
+          "captureRadius",
+          "clearedBy"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "debrief": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "dt": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "id": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "name": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "probes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "dryMass": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "exhaustVelocity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxThrust": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "nodeBudget": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "propellantMass": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "count",
+          "dryMass",
+          "propellantMass",
+          "exhaustVelocity",
+          "maxThrust",
+          "nodeBudget"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "rails": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "headingCone": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "host": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "muzzleSpeed": {
+            "additionalProperties": false,
+            "properties": {
+              "max": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              },
+              "min": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "min",
+              "max"
+            ],
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reloadTime": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "host",
+          "longitude",
+          "muzzleSpeed",
+          "headingCone",
+          "reloadTime"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "const": 1
+    },
+    "seed": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "streams": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "name",
+    "brief",
+    "debrief",
+    "seed",
+    "streams",
+    "dt",
+    "bodies",
+    "rails",
+    "probes",
+    "contacts"
+  ],
+  "type": "object"
+}
