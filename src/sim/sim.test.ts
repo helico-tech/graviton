@@ -266,7 +266,7 @@ describe('burn nodes for a probe that has hit a body', () => {
     const laterDueTick = dueTick + 20;
     const log: Command[] = [
       { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }, // probe 0: falls back and hits
-      { tick: 0, kind: 'launch', body: 0, heading: 32768, speed: 12_000_000 }, // probe 1: escapes, unaffected
+      { tick: 0, kind: 'launch', body: 0, heading: 32768 * 65536, speed: 12_000_000 }, // probe 1: escapes, unaffected
       { tick: 0, kind: 'burn', probe: 0, atTick: dueTick, prograde: 100_000, lateral: 0 },
       { tick: 0, kind: 'burn', probe: 1, atTick: dueTick, prograde: 100_000, lateral: 0 },
       { tick: 0, kind: 'burn', probe: 0, atTick: laterDueTick, prograde: 200_000, lateral: 0 },
