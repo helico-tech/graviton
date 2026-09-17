@@ -10,7 +10,7 @@ work: GRV-0013
 ## Observation
 
 Found while writing ADR-0006. `commands.ts` quantises launch heading to 1/65536 turn
-(9.6e-5 rad, ADR-0005). Research 03 §B.3 measured 2.8e8 m of miss per radian over a 10.9-day
+(9.6e-5 rad, ADR-0005). Research 03 §B.3 measured 2.8e11 m of miss per radian (its prose says 2.8e8; its table is right) over a 10.9-day
 flight, so one quantum is about 27 000 km against capture radii of tens of kilometres: no level
 with a free-flight leg is solvable. ADR-0006 moves heading to 1/2^32 turn. P1 because every
 level depends on it.

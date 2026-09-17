@@ -15,7 +15,8 @@ GAME-0001 §9 leans towards levels as data. The measurements are in
 costs 13 to 30 kB gzipped and 0.2 to 1.9 ms per parse, `JSON.parse` costs
 nothing; unit suffixes prevent order-of-magnitude typos but their conversion
 rounds (`24.1 d` is not the double an author expects); a launch heading moves
-the miss by 2.8e8 m per radian over an eleven-day flight, so nobody
+the miss by 2.8e11 m per radian over an eleven-day flight
+(28.1 km per 1e-7 rad; the report's prose says 2.8e8, its table is right), so nobody
 hand-authors a solution.
 
 That last number also breaks a row of ADR-0005. A heading quantum of 1/65536

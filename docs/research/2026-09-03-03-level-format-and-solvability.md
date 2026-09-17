@@ -705,7 +705,11 @@ solution:
 | 1e-7 rad (0.0000057 deg) | 28.1 km |
 
 Roughly **2.8e8 metres of miss per radian** of launch heading, over a 10.9-day
-flight. This is why a human or an agent cannot hand-author a working launch
+flight.
+
+> **SUPERSEDED 2026-09-17 → docs/evidence/GRV-0013/README.md:** the table above gives
+> 28.1 km per 1e-7 rad, which is 2.8e11 m per radian, not 2.8e8.
+ This is why a human or an agent cannot hand-author a working launch
 vector, and it is the core justification for the solver.
 
 The objective is smooth and locally linear across that sweep, with no
