@@ -18,6 +18,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
   return {
     dt: DT,
     capacity: 4,
+    burnNodeCapacity: 4,
     bodies: [{ parent: -1, mu: MU, radius: RADIUS }],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection', 'sensor_noise'],
@@ -221,5 +222,65 @@ describe('hash sensitivity', () => {
     sim.objects.x[0] = view.getFloat64(0);
 
     expect(hashSim(sim)).not.toBe(before);
+  });
+});
+
+describe('pending burn node ordering', () => {
+  // A long first burn (~19 ticks) keeps the probe busy while two more burn
+  // nodes are scheduled at tick 1, deliberately enqueued out of atTick order
+  // (atTick 8 before atTick 3) and both already due long before the long
+  // burn ends -- so both spend most of the run waiting on the same probe.
+  function longBurnLog(): Command[] {
+    return [
+      { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 12_000_000 },
+      { tick: 0, kind: 'burn', probe: 0, atTick: 0, prograde: 500_000, lateral: 0 },
+      { tick: 1, kind: 'burn', probe: 0, atTick: 8, prograde: 30_000, lateral: 0 },
+      { tick: 1, kind: 'burn', probe: 0, atTick: 3, prograde: 10_000, lateral: 0 },
+    ];
+  }
+
+  test('two nodes due while a long burn is active fire afterwards in atTick order', () => {
+    const sim = createSim({ scenario: scenario(), seed: 1 });
+    const log = longBurnLog();
+    // Sampled at tick boundaries (where activateDueBurnNodes runs), not by
+    // watching `burning` mid-tick: a short enough burn can arm and finish
+    // entirely within one tick's internal substeps, so `pending.count`'s
+    // transitions are the reliable signal of firing order, not `burning`.
+    let sawBothWaiting = false;
+    let remainingAfterFirstFire: number[] | null = null;
+    let lastCount = 0;
+    for (let t = 0; t < 40; t++) {
+      run(sim, log, 1);
+      const count = sim.pending.count;
+      if (count === 2) sawBothWaiting = true;
+      if (lastCount === 2 && count === 1 && remainingAfterFirstFire === null) {
+        remainingAfterFirstFire = Array.from(sim.pending.prograde.slice(0, count));
+      }
+      lastCount = count;
+    }
+    expect(sawBothWaiting).toBe(true);
+    // The atTick-3 node (10_000 mm/s) fires first even though it was
+    // enqueued second (after the atTick-8 node); only the atTick-8 node
+    // (30_000) is left waiting.
+    expect(remainingAfterFirstFire).toEqual([30_000]);
+    expect(sim.objects.burning[0]).toBe(0);
+    expect(sim.pending.count).toBe(0);
+  });
+
+  test('the same firing order survives a serialise/deserialise mid-wait', () => {
+    const log = longBurnLog();
+    const uninterrupted = createSim({ scenario: scenario(), seed: 1 });
+    run(uninterrupted, log, 40);
+
+    const first = createSim({ scenario: scenario(), seed: 1 });
+    run(first, log, 5); // both extra nodes enqueued and already waiting
+    expect(first.pending.count).toBe(2);
+    expect(first.objects.burning[0]).toBe(1); // still on the original burn
+
+    const bytes = serializeSim(first);
+    const reloaded = deserializeSim({ scenario: scenario(), bytes });
+    run(reloaded, log, 35);
+
+    expect(hashSim(reloaded)).toBe(hashSim(uninterrupted));
   });
 });

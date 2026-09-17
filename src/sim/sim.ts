@@ -32,6 +32,11 @@ export interface Scenario {
   dt: number;
   /** Maximum simultaneous dynamic objects. */
   capacity: number;
+  /** Maximum simultaneous pending (not-yet-armed) burn nodes, independent of
+   *  `capacity`: a flight plan carries several nodes per probe (GAME-0001
+   *  §4.4), so the queue is sized on its own rather than bounded by object
+   *  count. */
+  burnNodeCapacity: number;
   bodies: BodyDef[];
   probe: ProbeDef;
   /** Named random streams to create, e.g. ['debris_ejection']. Order fixes
@@ -39,10 +44,15 @@ export interface Scenario {
   streams: string[];
 }
 
-/** Dense, explicit-count pending burn nodes: a burn command schedules one of
- *  these rather than arming the burn immediately, because the node may need
- *  to wait for an earlier burn on the same probe to finish (see `advance`).
- *  mm/s, matching the command log's own quantisation. */
+/** Dense, explicit-count pending burn nodes, kept sorted by `atTick` (ties
+ *  broken by insertion order): a burn command schedules one of these rather
+ *  than arming the burn immediately, because the node may need to wait for
+ *  an earlier burn on the same probe to finish (see `advance`). Enqueueing
+ *  (commands.ts's `applyBurn`) inserts in sorted position; activating
+ *  (`activateDueBurnNodes` below) removes with a stable shift, so among
+ *  several due nodes waiting on the same probe the earliest `atTick` always
+ *  fires first, ties by log order -- never by removal history. mm/s,
+ *  matching the command log's own quantisation. */
 export interface PendingBurnNodes {
   object: Int32Array;
   atTick: Int32Array;
@@ -87,25 +97,44 @@ export function createSim({ scenario, seed }: { scenario: Scenario; seed: number
     objects: createDynamicObjects(scenario.capacity),
     scratch: createStepScratch({ bodies, dt: scenario.dt, capacity: scenario.capacity }),
     streams: scenario.streams.map((name) => createStream({ seed, name })),
-    // Bounded by object capacity: a burn node is scheduled for exactly one
-    // object, so there can never be more useful pending nodes than objects.
-    pending: createPendingBurnNodes(scenario.capacity),
+    pending: createPendingBurnNodes(scenario.burnNodeCapacity),
   };
+}
+
+/** Removes the pending node at `index` with a stable shift (every later
+ *  entry moves down by one), not a swap-with-last: that's what keeps the
+ *  queue's remaining entries sorted by `atTick` after a removal. */
+function removePendingNode(pending: PendingBurnNodes, index: number): void {
+  pending.count--;
+  for (let j = index; j < pending.count; j++) {
+    pending.object[j] = pending.object[j + 1]!;
+    pending.atTick[j] = pending.atTick[j + 1]!;
+    pending.prograde[j] = pending.prograde[j + 1]!;
+    pending.lateral[j] = pending.lateral[j + 1]!;
+  }
 }
 
 /** A node due while its probe is already burning waits: only one burn can be
  *  active on an object at a time, and re-arming a burning object would
  *  silently discard its current target, so the node stays pending and is
  *  re-checked every tick until the probe is free (state-driven, therefore
- *  deterministic). Swap-removes activated nodes; iteration order among the
- *  remaining pending nodes never matters because each only ever touches its
- *  own object. */
+ *  deterministic). The queue is sorted by `atTick` (ties by insertion order,
+ *  see `PendingBurnNodes`), so among several nodes due on the same free
+ *  probe the earliest `atTick` always fires first; skipped (still-waiting)
+ *  nodes are left in place, never reordered, so a later node can never fire
+ *  ahead of an earlier one it happened to be checked after. Once a node's
+ *  `atTick` is in the future nothing further in the (sorted) queue is due
+ *  either, so the scan stops there. */
 function activateDueBurnNodes(sim: Sim): void {
   const pending = sim.pending;
-  for (let i = 0; i < pending.count; i++) {
-    if (pending.atTick[i]! > sim.tick) continue;
+  let i = 0;
+  while (i < pending.count) {
+    if (pending.atTick[i]! > sim.tick) break;
     const object = pending.object[i]!;
-    if (sim.objects.burning[object]) continue;
+    if (sim.objects.burning[object]) {
+      i++;
+      continue;
+    }
 
     startBurn({
       objects: sim.objects,
@@ -113,13 +142,7 @@ function activateDueBurnNodes(sim: Sim): void {
       prograde: pending.prograde[i]! / 1000,
       lateral: pending.lateral[i]! / 1000,
     });
-
-    pending.count--;
-    pending.object[i] = pending.object[pending.count]!;
-    pending.atTick[i] = pending.atTick[pending.count]!;
-    pending.prograde[i] = pending.prograde[pending.count]!;
-    pending.lateral[i] = pending.lateral[pending.count]!;
-    i--;
+    removePendingNode(pending, i); // the node now at i is the next candidate
   }
 }
 
@@ -362,10 +385,12 @@ export function deserializeSim({
     objects.burning[i] = getI32();
   }
 
-  const pending = createPendingBurnNodes(scenario.capacity);
+  const pending = createPendingBurnNodes(scenario.burnNodeCapacity);
   const pendingCount = getI32();
-  if (pendingCount < 0 || pendingCount > scenario.capacity)
-    throw new Error(`deserializeSim: pending count ${pendingCount} exceeds capacity`);
+  if (pendingCount < 0 || pendingCount > scenario.burnNodeCapacity)
+    throw new Error(
+      `deserializeSim: pending count ${pendingCount} exceeds burn node capacity ${scenario.burnNodeCapacity}`,
+    );
   pending.count = pendingCount;
   for (let i = 0; i < pendingCount; i++) {
     pending.object[i] = getI32();

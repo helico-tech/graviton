@@ -2,6 +2,7 @@
   "scenario": {
     "dt": 60,
     "capacity": 4,
+    "burnNodeCapacity": 4,
     "bodies": [
       { "parent": -1, "mu": 1.32712440018e20, "radius": 6.957e8 },
       {

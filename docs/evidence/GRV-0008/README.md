@@ -15,15 +15,16 @@ CLI (`pnpm headless <golden.json>`). `tests/golden/flyby-burn.json` +
 
 ## Design decisions worth recording
 
-**Burn commands enqueue, they don't arm.** `applyCommand` on a `'burn'` command only pushes a
-row onto `Sim.pending` (dense `object`/`atTick`/`prograde`/`lateral` arrays, explicit `count`).
-`advance`'s `activateDueBurnNodes` runs every tick, after commands and before `stepTick`, and
-arms (`startBurn`) any node whose `atTick <= sim.tick` **and** whose probe isn't already
-burning; otherwise the node stays pending and is re-checked next tick. This is what makes
-"a node due while another burn is active waits" deterministic: the condition is state (is the
-probe burning right now), never a queue position or wall time, so two runs of the same log
-always arm nodes on the same tick. Swap-remove keeps the pending arrays dense; iteration order
-among the *remaining* pending nodes never matters because each only ever touches its own object.
+**Burn commands enqueue, they don't arm.** `applyCommand` on a `'burn'` command inserts a row
+into `Sim.pending` (dense `object`/`atTick`/`prograde`/`lateral` arrays, explicit `count`),
+**sorted by `atTick`, ties broken by insertion (log) order**. `advance`'s `activateDueBurnNodes`
+runs every tick, after commands and before `stepTick`, and arms (`startBurn`) any node whose
+`atTick <= sim.tick` **and** whose probe isn't already burning; otherwise the node stays pending,
+in place, and is re-checked next tick. This is what makes "a node due while another burn is
+active waits" deterministic: the condition is state (is the probe burning right now), never a
+queue position or wall time, so two runs of the same log always arm nodes on the same tick — and
+because the queue is *sorted*, among several nodes due on the same free probe the earliest
+`atTick` always fires first, never depending on removal history (see "Review fix" below).
 
 **The command log cursor is local to `advance`, not stored in `Sim`.** The log itself isn't
 part of the simulation's state (a level run is `(scenario, seed, log)`, not `(scenario, seed)`
@@ -42,10 +43,9 @@ and collide (sub-escape speed) or recede forever (super-escape speed), never cur
 fixture sidesteps this by launching from a *moon*, whose own orbital velocity supplies the
 angular momentum a radial kick alone cannot.
 
-**Pending-node queue capacity is bounded by `scenario.capacity`.** A burn node is scheduled for
-exactly one object, so there can never be more useful pending nodes than objects; sizing the
-dense pending arrays to `capacity` avoids a separate configuration knob and `applyCommand`
-throws plainly if it's ever exhausted.
+**Pending-node queue capacity is its own scenario field, `burnNodeCapacity`.** A flight plan
+carries several nodes per probe (GAME-0001 §4.4), so bounding the queue by object count is wrong
+in normal play; see "Review fix" below for how this was caught and corrected.
 
 **Serialisation excludes `scenario` and `scratch`.** Per research §8.3 ("nothing derived
 belongs in the state"), `deserializeSim` takes `scenario` as a parameter and rebuilds the body
@@ -55,6 +55,53 @@ little-endian, no `TextEncoder`) is: a header (format version, `SIM_VERSION`), t
 `hitBody`/`burning` that `hashSim` reads, in the same order), then pending nodes, then stream
 words. `deserializeSim` throws on either version mismatch and on a stored count exceeding the
 given scenario's capacity.
+
+## Review fix: pending burn-node queue ordering and capacity
+
+Code review of the first version of this unit found two real flaws in the pending burn-node
+queue, both in `Sim.pending`/`activateDueBurnNodes` (`sim.ts`) and `applyBurn` (`commands.ts`):
+
+1. **Capacity.** The pending arrays were sized to `scenario.capacity` (object count) on the
+   reasoning that "a burn node is scheduled for exactly one object, so there can never be more
+   useful pending nodes than objects" — wrong, because a single flight plan can carry several
+   burn nodes for the *same* probe (GAME-0001 §4.4), so bounding the queue by object count
+   throws in ordinary play well before it should. Fixed by adding an explicit
+   `Scenario.burnNodeCapacity` (total pending nodes across all objects), used to size the dense
+   arrays in both `createSim` and `deserializeSim` instead of `scenario.capacity`.
+2. **Order.** Activation swap-removed a fired node (moved the last entry into its slot), with
+   the doc comment claiming "iteration order among the remaining pending nodes never matters
+   because each only touches its own object" — false whenever *two* due nodes target the *same*
+   probe and one is waiting behind an active burn: which one fires first then depends on
+   swap-remove's removal history (in practice: whichever happened to land at the lowest index),
+   not on the nodes' own `atTick`. Fixed by keeping the queue **sorted by `atTick`, ties by
+   insertion (log) order**: `applyBurn` now insertion-sorts a new node into place;
+   `activateDueBurnNodes` removes a fired node with a **stable shift** (every later entry moves
+   down one slot, not a swap with the last), and stops scanning as soon as it hits a node whose
+   `atTick` is still in the future (nothing later in a sorted queue can be due either). The false
+   comment is corrected accordingly.
+
+Failing tests first, confirmed against the pre-fix code (temporarily swapped back in, tests
+re-run, then the fix restored) before being kept in the suite:
+
+- `commands.test.ts` — `'accepts more pending nodes than objects, up to burnNodeCapacity, and
+  throws beyond it'` (capacity=1 object, burnNodeCapacity=3, three nodes on the one probe
+  accepted, a fourth throws); `'nodes enqueued out of atTick order end up stored sorted by
+  atTick'`; `'ties at the same atTick keep log (insertion) order'`.
+- `sim.test.ts` — `'two nodes due while a long burn is active fire afterwards in atTick order'`
+  (a ~19-tick burn keeps a probe busy while two more nodes are enqueued *out of atTick order*
+  and both become due long before the long burn ends; the earlier-`atTick` one must fire first
+  regardless of enqueue order); `'the same firing order survives a serialise/deserialise
+  mid-wait'` (save while both nodes are still waiting on the active burn, reload, continue,
+  compare against an uninterrupted run's hash).
+
+Against the pre-fix code the ordering test failed exactly as expected (`30_000` fired before
+`10_000`, i.e. enqueue order rather than `atTick` order); the capacity test threw on the second
+enqueued node rather than the fourth.
+
+**The golden hash did not move.** `flyby-burn.json` schedules exactly one burn node, so there is
+never more than one pending entry at a time and the insertion-sort/stable-shift logic degenerates
+to a plain append/remove — confirmed by re-running `pnpm headless` after adding
+`"burnNodeCapacity": 4` to the fixture (`hash e18434ee2785b566`, unchanged).
 
 ## The golden fixture: a moon-launched Jupiter flyby with a mid-course burn
 
@@ -83,7 +130,7 @@ $ node src/headless/run.ts tests/golden/flyby-burn.json
 tick 6000
 hash e18434ee2785b566
 MATCH
-238293.8 ticks/s
+235126.2 ticks/s
 ```
 
 Repeated runs land in the 232 000–247 000 ticks/s band (single object, mostly cruise with a
@@ -135,9 +182,9 @@ $ vitest run
 
 
  Test Files  19 passed (19)
-      Tests  131 passed (131)
-   Start at  21:12:19
-   Duration  2.55s (transform 560ms, setup 0ms, import 1.07s, tests 3.99s, environment 1ms)
+      Tests  135 passed (135)
+   Start at  21:21:55
+   Duration  2.61s (transform 682ms, setup 0ms, import 1.25s, tests 4.01s, environment 2ms)
 ```
 
 `pnpm docs:validate`: `docs: ok`. `pnpm build`: succeeds (`vite build`, 4 modules, ~30 ms).

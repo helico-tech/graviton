@@ -15,6 +15,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
   return {
     dt: DT,
     capacity: 4,
+    burnNodeCapacity: 4,
     bodies: [{ parent: -1, mu: MU, radius: RADIUS }],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection'],
@@ -129,11 +130,40 @@ describe('burn', () => {
     expect(() => applyCommand({ sim, command: burn({ lateral: 1.5 }) })).toThrow();
   });
 
-  test('throws once the pending queue capacity is exhausted', () => {
-    const sim = makeSim({ capacity: 1 });
+  // A flight plan can carry several nodes per probe (GAME-0001 §4.4), so
+  // the pending queue is sized on its own, not bounded by object capacity.
+  test('accepts more pending nodes than objects, up to burnNodeCapacity, and throws beyond it', () => {
+    const sim = makeSim({ capacity: 1, burnNodeCapacity: 3 });
     applyCommand({ sim, command: launch() });
-    applyCommand({ sim, command: burn() });
-    expect(() => applyCommand({ sim, command: burn() })).toThrow();
+    applyCommand({ sim, command: burn({ atTick: 1 }) });
+    applyCommand({ sim, command: burn({ atTick: 2 }) });
+    applyCommand({ sim, command: burn({ atTick: 3 }) });
+    expect(sim.pending.count).toBe(3); // three pending nodes on a single object
+
+    expect(() => applyCommand({ sim, command: burn({ atTick: 4 }) })).toThrow();
+  });
+
+  test('nodes enqueued out of atTick order end up stored sorted by atTick', () => {
+    const sim = makeSim({ burnNodeCapacity: 3 });
+    applyCommand({ sim, command: launch() });
+    applyCommand({ sim, command: burn({ atTick: 30, prograde: 3 }) });
+    applyCommand({ sim, command: burn({ atTick: 10, prograde: 1 }) });
+    applyCommand({ sim, command: burn({ atTick: 20, prograde: 2 }) });
+
+    expect(Array.from(sim.pending.atTick)).toEqual([10, 20, 30]);
+    expect(Array.from(sim.pending.prograde)).toEqual([1, 2, 3]);
+  });
+
+  test('ties at the same atTick keep log (insertion) order', () => {
+    const sim = makeSim({ burnNodeCapacity: 3 });
+    applyCommand({ sim, command: launch() });
+    applyCommand({ sim, command: burn({ atTick: 10, prograde: 1 }) });
+    applyCommand({ sim, command: burn({ atTick: 10, prograde: 2 }) });
+    applyCommand({ sim, command: burn({ atTick: 5, prograde: 3 }) });
+
+    // atTick 5 sorts first; the two atTick-10 entries keep their enqueue order.
+    expect(Array.from(sim.pending.atTick)).toEqual([5, 10, 10]);
+    expect(Array.from(sim.pending.prograde)).toEqual([3, 1, 2]);
   });
 });
 

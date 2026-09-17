@@ -106,11 +106,24 @@ function applyBurn(sim: Sim, command: BurnCommand): void {
   const pending = sim.pending;
   if (pending.count >= pending.object.length)
     throw new Error(`burn: pending burn queue capacity ${pending.object.length} exceeded`);
-  const p = pending.count++;
+
+  // Insertion-sort into place by atTick, so the queue stays sorted and
+  // activateDueBurnNodes (sim.ts) never has to guess an order: ties go after
+  // every existing entry with the same atTick, which is exactly log order
+  // since commands are applied (and so enqueued) in log order.
+  let p = pending.count;
+  while (p > 0 && pending.atTick[p - 1]! > command.atTick) {
+    pending.object[p] = pending.object[p - 1]!;
+    pending.atTick[p] = pending.atTick[p - 1]!;
+    pending.prograde[p] = pending.prograde[p - 1]!;
+    pending.lateral[p] = pending.lateral[p - 1]!;
+    p--;
+  }
   pending.object[p] = command.probe;
   pending.atTick[p] = command.atTick;
   pending.prograde[p] = command.prograde;
   pending.lateral[p] = command.lateral;
+  pending.count++;
 }
 
 /** Validates and applies one command. The only way a command touches `Sim`
