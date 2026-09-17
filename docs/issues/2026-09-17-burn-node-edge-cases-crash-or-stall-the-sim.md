@@ -1,8 +1,9 @@
 ---
-status: open
+status: triaged
 priority: P2
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0009
 ---
 # Burn node edge cases crash or stall the sim
 
