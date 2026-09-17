@@ -76,6 +76,42 @@ export interface Sim {
   pending: PendingBurnNodes;
 }
 
+/** Mirrors createBodyTable's validation style (body validation itself stays
+ *  there): a malformed scenario must fail here, at load, never silently
+ *  mid-run (docs/issues/2026-09-17-scenario-probe-and-body-radius-
+ *  unvalidated.md) -- thrust: 0 arms a burn that never ends, exhaustVelocity:
+ *  0 makes mdot infinite and dumps the whole tank in one kick. */
+function validateScenario(scenario: Scenario): void {
+  if (!Number.isFinite(scenario.dt) || scenario.dt <= 0)
+    throw new Error(`validateScenario: non-positive or non-finite dt (${scenario.dt})`);
+  if (!Number.isInteger(scenario.capacity) || scenario.capacity <= 0)
+    throw new Error(
+      `validateScenario: non-integer or non-positive capacity (${scenario.capacity})`,
+    );
+  if (!Number.isInteger(scenario.burnNodeCapacity) || scenario.burnNodeCapacity < 0)
+    throw new Error(
+      `validateScenario: non-integer or negative burnNodeCapacity (${scenario.burnNodeCapacity})`,
+    );
+
+  const probe = scenario.probe;
+  if (!Number.isFinite(probe.dryMass) || probe.dryMass <= 0)
+    throw new Error(
+      `validateScenario: probe has non-positive or non-finite dryMass (${probe.dryMass})`,
+    );
+  if (!Number.isFinite(probe.propellantMass) || probe.propellantMass < 0)
+    throw new Error(
+      `validateScenario: probe has negative or non-finite propellantMass (${probe.propellantMass})`,
+    );
+  if (!Number.isFinite(probe.thrust) || probe.thrust <= 0)
+    throw new Error(
+      `validateScenario: probe has non-positive or non-finite thrust (${probe.thrust})`,
+    );
+  if (!Number.isFinite(probe.exhaustVelocity) || probe.exhaustVelocity <= 0)
+    throw new Error(
+      `validateScenario: probe has non-positive or non-finite exhaustVelocity (${probe.exhaustVelocity})`,
+    );
+}
+
 function createPendingBurnNodes(capacity: number): PendingBurnNodes {
   return {
     object: new Int32Array(capacity),
@@ -88,6 +124,7 @@ function createPendingBurnNodes(capacity: number): PendingBurnNodes {
 
 export function createSim({ scenario, seed }: { scenario: Scenario; seed: number }): Sim {
   selfCheck();
+  validateScenario(scenario);
   const bodies = createBodyTable(scenario.bodies);
   return {
     scenario,
@@ -344,6 +381,7 @@ export function deserializeSim({
   bytes: Uint8Array;
 }): Sim {
   selfCheck();
+  validateScenario(scenario);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let off = 0;
   const getU32 = () => {

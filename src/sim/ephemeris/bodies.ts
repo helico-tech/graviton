@@ -68,7 +68,12 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
 
   for (let i = 0; i < count; i++) {
     const def = defs[i]!;
-    if (def.mu <= 0) throw new Error(`createBodyTable: body ${i} has non-positive mu (${def.mu})`);
+    if (!Number.isFinite(def.mu) || def.mu <= 0)
+      throw new Error(`createBodyTable: body ${i} has non-positive or non-finite mu (${def.mu})`);
+    if (!Number.isFinite(def.radius) || def.radius <= 0)
+      throw new Error(
+        `createBodyTable: body ${i} has non-positive or non-finite radius (${def.radius})`,
+      );
 
     // `'a' in def` rather than `def.parent === -1`: OrbitingBodyDef's
     // `parent` is typed `number`, not a literal, so it isn't a usable
@@ -86,12 +91,22 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
       throw new Error(
         `createBodyTable: body ${i} has parent ${def.parent}, must satisfy 0 <= parent < ${i}`,
       );
-    if (def.e < 0 || def.e > MAX_ECCENTRICITY)
+    if (!Number.isFinite(def.e) || def.e < 0 || def.e > MAX_ECCENTRICITY)
       throw new Error(
         `createBodyTable: body ${i} has eccentricity ${def.e}, must be in [0, ${MAX_ECCENTRICITY}]`,
       );
-    if (def.a <= 0)
-      throw new Error(`createBodyTable: body ${i} has non-positive semi-major axis (${def.a})`);
+    if (!Number.isFinite(def.a) || def.a <= 0)
+      throw new Error(
+        `createBodyTable: body ${i} has non-positive or non-finite semi-major axis (${def.a})`,
+      );
+    if (!Number.isFinite(def.argPeriapsis))
+      throw new Error(
+        `createBodyTable: body ${i} has non-finite argPeriapsis (${def.argPeriapsis})`,
+      );
+    if (!Number.isFinite(def.meanAnomaly0))
+      throw new Error(
+        `createBodyTable: body ${i} has non-finite meanAnomaly0 (${def.meanAnomaly0})`,
+      );
 
     table.parent[i] = def.parent;
     table.mu[i] = def.mu;
