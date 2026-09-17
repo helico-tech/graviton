@@ -49,6 +49,9 @@ Two measured facts decided it:
 | Fonts | JetBrains Mono, Barlow Condensed, self-hosted woff2 from `@fontsource` | 5.3.0 |
 | Audio | Web Audio behind an interface with a null implementation | browser API |
 
+> **SUPERSEDED 2026-09-17 → docs/evidence/GRV-0011/README.md:** Playwright entered the repo at
+> 1.63.0, the registry's latest stable on that day, with Chromium and Firefox projects.
+
 Runtime dependencies of the shipped bundle: none beyond the two font files.
 
 TypeScript 7.0 (native compiler) and oxlint were the researcher's first
