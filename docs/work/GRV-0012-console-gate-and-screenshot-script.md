@@ -1,7 +1,7 @@
 ---
 id: GRV-0012
 epic: EPIC-03
-status: todo
+status: done
 ---
 # GRV-0012 Console gate and the screenshot script with deploy proof
 
@@ -20,3 +20,10 @@ status: todo
 - The live Pages site passes `--expect-build $(git rev-parse --short HEAD)` after the merge.
 
 **Verification.** `pnpm check`, `pnpm e2e`, the live-site run in `docs/evidence/GRV-0012/`.
+
+**Delivered.** `scripts/lib/console-gate.ts` (shared by `tests/e2e/console-gate.ts` and
+`scripts/screenshot.ts`), `tests/e2e/console-gate.spec.ts`, `parity.spec.ts` refactored onto it,
+`scripts/lib/static-server.ts`, `scripts/screenshot.ts` + `pnpm screenshot`, unit tests for every
+pure part, `tests/e2e/screenshot.spec.ts`, and the "Proving a change" section in
+`docs/README.md`. See `docs/evidence/GRV-0012/README.md` for full output and the live-site proof
+(right SHA exits 0, wrong SHA exits 1).
