@@ -1,7 +1,7 @@
 ---
 id: GRV-0005
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0005 Kepler solver and analytic ephemeris
 
@@ -21,3 +21,9 @@ celestial body at any tick (ADR-0005 "Kepler solver", research §1).
   a moon's state is its parent's plus its own.
 
 **Verification.** `pnpm check`.
+
+**Delivered.** `src/sim/ephemeris/kepler.ts` (`solveKepler`, ported from
+`q1_core.mjs`) and `src/sim/ephemeris/bodies.ts` (`createBodyTable`,
+`evaluateEphemeris`), tests beside them. Measured residuals and deviations
+from the reference in `docs/evidence/GRV-0005/README.md`. Found the import-guard bug resolved in
+`docs/issues/2026-09-17-sim-lint-bans-imports-between-core-subdirectories.md`.
