@@ -31,7 +31,7 @@ export const BANNED_MATH = [
 ];
 
 export default defineConfig([
-  globalIgnores(['dist/', 'node_modules/', 'runs/', '.playwright-cli/', 'test-results/']),
+  globalIgnores(['docs/', 'dist/', 'node_modules/', 'runs/', '.playwright-cli/', 'test-results/']),
   js.configs.recommended,
   tseslint.configs.recommended,
   {

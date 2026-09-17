@@ -1697,6 +1697,11 @@ All under
 `scratchpad/research/sim-probe/`.
 Python 3.12 standard library only, Node 24 with no dependencies.
 
+> **SUPERSEDED 2026-09-17 → docs/work/EPIC-02-sim-core.md:** the scratchpad was
+> session-local; the scripts are now committed beside this report in
+> `docs/research/2026-09-03-02-simulation-numerics-probes/`.
+
+
 | Script | What it establishes |
 |---|---|
 | `p1_flyby_analytic.py` | Deflection angles for five body classes, confirming the design table; free delta-v; encounter durations |
