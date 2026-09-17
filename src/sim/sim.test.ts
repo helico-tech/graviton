@@ -182,6 +182,51 @@ describe('substep determinism', () => {
   });
 });
 
+describe('burn nodes for a probe that has hit a body', () => {
+  function launchOnlyLog(): Command[] {
+    return [{ tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }]; // radial, sub-escape: falls back and hits
+  }
+
+  // Finds the tick the radial-fall probe actually hits at, empirically, rather
+  // than assuming a value: the exact tick depends on the integrator, not a
+  // closed-form time of flight.
+  function findHitTick(): number {
+    const sim = createSim({ scenario: scenario(), seed: 1 });
+    for (let t = 0; t < 400; t++) {
+      run(sim, launchOnlyLog(), 1);
+      if (sim.objects.hitBody[0] !== -1) return sim.tick;
+    }
+    throw new Error('test setup: probe 0 never hit the body within 400 ticks');
+  }
+
+  test('a due node for a hit probe is dropped, not armed; nodes for other probes fire normally', () => {
+    const hitTick = findHitTick();
+    const dueTick = hitTick + 10;
+    const laterDueTick = dueTick + 20;
+    const log: Command[] = [
+      { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }, // probe 0: falls back and hits
+      { tick: 0, kind: 'launch', body: 0, heading: 32768, speed: 12_000_000 }, // probe 1: escapes, unaffected
+      { tick: 0, kind: 'burn', probe: 0, atTick: dueTick, prograde: 100_000, lateral: 0 },
+      { tick: 0, kind: 'burn', probe: 1, atTick: dueTick, prograde: 100_000, lateral: 0 },
+      { tick: 0, kind: 'burn', probe: 0, atTick: laterDueTick, prograde: 200_000, lateral: 0 },
+    ];
+
+    const sim = createSim({ scenario: scenario(), seed: 1 });
+    run(sim, log, hitTick);
+    expect(sim.objects.hitBody[0]).not.toBe(-1); // hit as predicted
+    expect(sim.pending.count).toBe(3); // none due yet
+
+    run(sim, log, dueTick - hitTick + 1); // carry past the first due tick
+    expect(sim.objects.burning[0]).toBe(0); // hit probe never arms
+    expect(sim.pending.count).toBe(1); // probe 0's node dropped, probe 1's fired; probe 0's later node still waits
+    expect(sim.objects.burnDelivered[1]).toBeGreaterThan(0); // probe 1's burn actually ran
+
+    run(sim, log, laterDueTick - dueTick); // carry past the later due tick too
+    expect(sim.objects.burning[0]).toBe(0); // still never arms
+    expect(sim.pending.count).toBe(0); // the later node was dropped too, in its turn
+  });
+});
+
 describe('seed', () => {
   test('different seeds give different stream words, and therefore different hashes', () => {
     const a = createSim({ scenario: scenario(), seed: 1 });

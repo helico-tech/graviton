@@ -124,13 +124,23 @@ function removePendingNode(pending: PendingBurnNodes, index: number): void {
  *  nodes are left in place, never reordered, so a later node can never fire
  *  ahead of an earlier one it happened to be checked after. Once a node's
  *  `atTick` is in the future nothing further in the (sorted) queue is due
- *  either, so the scan stops there. */
+ *  either, so the scan stops there. A due node whose probe has already hit
+ *  a body is dropped rather than waited on: a hit probe never becomes free
+ *  (see the comment inside), so waiting would stall every node behind it. */
 function activateDueBurnNodes(sim: Sim): void {
   const pending = sim.pending;
   let i = 0;
   while (i < pending.count) {
     if (pending.atTick[i]! > sim.tick) break;
     const object = pending.object[i]!;
+    // A hit probe is frozen (every kick skips it, research §3.4): arming it
+    // would leave `burning` set forever and stall any node still behind it
+    // in the queue. Drop the node instead -- removePendingNode's stable
+    // shift keeps this deterministic and leaves other probes' nodes alone.
+    if (sim.objects.hitBody[object] !== -1) {
+      removePendingNode(pending, i);
+      continue;
+    }
     if (sim.objects.burning[object]) {
       i++;
       continue;

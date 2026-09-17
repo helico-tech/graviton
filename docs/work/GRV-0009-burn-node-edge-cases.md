@@ -1,7 +1,7 @@
 ---
 id: GRV-0009
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0009 Burn node edge cases
 
@@ -19,3 +19,8 @@ Post-epic review finding, `docs/issues/2026-09-17-burn-node-edge-cases-crash-or-
 - The golden hash does not move.
 
 **Verification.** `pnpm check`, `pnpm headless tests/golden/flyby-burn.json`.
+
+**Delivered.** `applyBurn` rejects zero-prograde-zero-lateral burns; `activateDueBurnNodes` drops
+due nodes of a probe that has hit a body instead of arming them; `testCollisions` clears `burning`
+in the same pass it sets `hitBody`. All test-first, `pnpm check` green, golden hash unchanged
+(`e18434ee2785b566`). Evidence: `docs/evidence/GRV-0009/README.md`.
