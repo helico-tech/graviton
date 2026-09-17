@@ -1,7 +1,7 @@
 ---
 id: GRV-0016
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0016 Level compiler
 
@@ -32,3 +32,7 @@ game, the headless runner and every hash read (ADR-0006 §1-3, §6).
 - No YAML parser and no valibot in the app bundle (checked on the built `dist/`).
 
 **Verification.** `pnpm check`, `pnpm build`, `pnpm levels:build --check`.
+
+**Delivered.** `src/levels/{units,schema,compile}.ts`, `scripts/levels-build.ts`, the fixture
+level and its compiled JSON, and the generated `levels/schema/level.schema.json`. See
+`docs/evidence/GRV-0016/README.md` for output, a sample of issue output, and the bundle check.
