@@ -13,6 +13,7 @@
 
 import { dexp } from '../math/kernels.ts';
 import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
+import type { ContactTable } from '../contacts.ts';
 
 export const ETA = 0.05;
 export const ZETA = 1 / 32;
@@ -76,6 +77,17 @@ export interface SubstepLevelArgs {
   /** Bodies' state at the tick's start time: the level is chosen from
    *  state at the tick's start (research §4.9). */
   eph: EphemerisOut;
+  /** Fixed contacts (GRV-0015): the crossing ladder against every contact,
+   *  independent of `cleared` -- a ghost integrated alone must take the
+   *  same substeps whichever contacts a crowd around it happens to have
+   *  cleared (ghost isolation). Optional: callers with no contacts concept
+   *  (most existing tests) omit both this and `contactEph` and get the
+   *  body-only level. */
+  contacts?: ContactTable;
+  /** Contacts' state at the tick's start time, same shape as `eph`, one
+   *  entry per `contacts` row -- computed once per tick (step.ts), never
+   *  per object. */
+  contactEph?: EphemerisOut;
   /** Burn state, from this object alone (research §3.6's burn ladder term;
    *  ghost isolation requires the level come only from the object's own
    *  state, never from other objects in its group). Optional: callers with
@@ -105,6 +117,8 @@ export function substepLevel({
   vx,
   vy,
   eph,
+  contacts,
+  contactEph,
   burning = 0,
   mass = 0,
   thrust = 0,
@@ -131,6 +145,29 @@ export function substepLevel({
 
     const l = l1 > l2 ? l1 : l2;
     if (l > L) L = l;
+  }
+
+  // Crossing ladder against every fixed contact (GRV-0015, research §B.4:
+  // "the substep ladder as specified does not refine on the target"),
+  // independent of `cleared` -- a cleared contact still forces the same
+  // refinement a ghost would see integrated alone, which is what keeps ghost
+  // isolation holding with contacts present. r is floored at the contact's
+  // own capture radius so the loop never chases r -> 0 as a probe centres on
+  // it.
+  if (contacts && contactEph) {
+    for (let c = 0; c < contacts.count; c++) {
+      const dx = x - contactEph.x[c]!;
+      const dy = y - contactEph.y[c]!;
+      const r = Math.sqrt(dx * dx + dy * dy);
+      const captureRadius = contacts.captureRadius[c]!;
+      const rFloored = r > captureRadius ? r : captureRadius;
+
+      const rvx = vx - contactEph.vx[c]!;
+      const rvy = vy - contactEph.vy[c]!;
+      const vRel = Math.sqrt(rvx * rvx + rvy * rvy);
+      const l = crossingLevel(dt, vRel, ZETA * rFloored);
+      if (l > L) L = l;
+    }
   }
 
   if (burning) {

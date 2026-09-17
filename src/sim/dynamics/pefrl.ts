@@ -35,6 +35,11 @@ export interface PefrlObjects {
   /** -1 = not hit; a hit object is skipped by every drift and kick so it
    *  freezes at the position and velocity it had when it hit. */
   hitBody: Int32Array;
+  /** -1 = none; a probe that cleared or merely impacted a fixed contact
+   *  (GRV-0015) is expended exactly like a body hit -- skipped by every
+   *  drift and kick alongside hitBody, so "expended" is `hitBody !== -1 ||
+   *  hitContact !== -1`, never a single flag derived from the two. */
+  hitContact: Int32Array;
   /** Current propellant + dry mass, kg. Untouched unless `burning`. */
   mass: Float64Array;
   /** Mass left when the tank is empty, kg (research §3.6). */
@@ -59,7 +64,7 @@ export interface PefrlObjects {
 function drift(objects: PefrlObjects, idx: Int32Array, n: number, h: number): void {
   for (let j = 0; j < n; j++) {
     const i = idx[j]!;
-    if (objects.hitBody[i] !== -1) continue;
+    if (objects.hitBody[i] !== -1 || objects.hitContact[i] !== -1) continue;
     objects.x[i]! += h * objects.vx[i]!;
     objects.y[i]! += h * objects.vy[i]!;
   }
@@ -82,7 +87,7 @@ function kick(
 ): void {
   for (let j = 0; j < n; j++) {
     const i = idx[j]!;
-    if (objects.hitBody[i] !== -1) continue;
+    if (objects.hitBody[i] !== -1 || objects.hitContact[i] !== -1) continue;
     const px = objects.x[i]!;
     const py = objects.y[i]!;
     let ax = 0;

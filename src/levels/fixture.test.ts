@@ -1,7 +1,5 @@
 // Proves the committed fixture artefact is loadable by the real simulation, not just valid JSON
-// (docs/work/GRV-0016-level-compiler.md): loads the compiled levels/T00-compiler-fixture.level.json,
-// strips `contacts` (same reason compile.ts does -- Scenario does not have the field until
-// GRV-0015 merges), and runs createSim plus a few hundred ticks.
+// (docs/work/GRV-0016-level-compiler.md).
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -11,7 +9,7 @@ import { repoRoot } from '../../scripts/lib/repo.ts';
 
 interface CompiledFixture {
   seed: number;
-  scenario: Scenario & { contacts: unknown };
+  scenario: Scenario;
 }
 
 describe('the compiled fixture level', () => {
@@ -22,8 +20,7 @@ describe('the compiled fixture level', () => {
     );
     const compiled = JSON.parse(raw) as CompiledFixture;
 
-    const { contacts: _contacts, ...scenario } = compiled.scenario;
-    const sim = createSim({ scenario, seed: compiled.seed });
+    const sim = createSim({ scenario: compiled.scenario, seed: compiled.seed });
 
     expect(() => advance({ sim, log: [], ticks: 300 })).not.toThrow();
     expect(sim.tick).toBe(300);

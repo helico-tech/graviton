@@ -40,6 +40,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
         reloadTicks: 0,
       },
     ],
+    contacts: [],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection', 'sensor_noise'],
     ...overrides,
@@ -338,6 +339,140 @@ describe('burn nodes for a probe that has hit a body', () => {
     run(sim, log, laterDueTick - dueTick); // carry past the later due tick too
     expect(sim.objects.burning[0]).toBe(0); // still never arms
     expect(sim.pending.count).toBe(0); // the later node was dropped too, in its turn
+  });
+});
+
+// GRV-0015: fixed contacts as Sim state -- serialisation, hashing, and a
+// contact-expended probe's pending nodes. The impact test's own math (swept
+// segment, ladder term, ghost isolation) is step.test.ts's; this file
+// covers the state that rides on top of it.
+describe('fixed contacts', () => {
+  const CONTACT_LONGITUDE = 0.5;
+  const CAPTURE_RADIUS = 40000;
+
+  function contactScenario(minimumImpactEnergy: number): Scenario {
+    return scenario({
+      contacts: [
+        {
+          host: 0,
+          longitude: CONTACT_LONGITUDE,
+          captureRadius: CAPTURE_RADIUS,
+          minimumImpactEnergy,
+        },
+      ],
+    });
+  }
+
+  // Places a probe 600 km out from the contact, heading straight at it, by
+  // direct field assignment rather than solving a real launch heading for
+  // it (mirrors this file's own "hash sensitivity" test's direct pokes) --
+  // what these tests check is contact *state* handling, not a realistic
+  // flight; step.test.ts already covers the impact test's own geometry.
+  function seedAimedProbe(sim: Sim, speed: number): void {
+    const contactX = RADIUS * Math.cos(CONTACT_LONGITUDE);
+    const contactY = RADIUS * Math.sin(CONTACT_LONGITUDE);
+    const i = sim.objects.count++;
+    sim.objects.x[i] = contactX + 600000;
+    sim.objects.y[i] = contactY;
+    sim.objects.vx[i] = -speed;
+    sim.objects.vy[i] = 0;
+    sim.objects.hitBody[i] = -1;
+    sim.objects.hitContact[i] = -1;
+    sim.objects.mass[i] = 1000;
+    sim.objects.dryMass[i] = 500;
+    sim.objects.thrust[i] = 400;
+    sim.objects.exhaustVelocity[i] = 3000;
+    sim.objects.burning[i] = 0;
+  }
+
+  function stepUntilImpact(sim: Sim): void {
+    for (let t = 0; t < 200 && sim.objects.hitContact[0] === -1; t++) run(sim, [], 1);
+    if (sim.objects.hitContact[0] === -1)
+      throw new Error('test setup: probe never hit the contact');
+  }
+
+  test("serialise round-trip mid-approach carries a live contact's state (before and after impact)", () => {
+    const before = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(before, 5000);
+    run(before, [], 1); // mid-approach (600 km out at 5000 m/s takes 2 ticks), contact not yet impacted
+    expect(before.objects.hitContact[0]).toBe(-1);
+    expect(before.contactState.impactTick[0]).toBe(-1);
+
+    const bytesBefore = serializeSim(before);
+    const reloadedBefore = deserializeSim({ scenario: contactScenario(1e9), bytes: bytesBefore });
+    run(reloadedBefore, [], 19);
+    expect(reloadedBefore.objects.hitContact[0]).toBe(0); // reached the contact after reload
+    expect(reloadedBefore.contactState.cleared[0]).toBe(1);
+
+    const uninterrupted = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(uninterrupted, 5000);
+    run(uninterrupted, [], 20);
+    expect(hashSim(reloadedBefore)).toBe(hashSim(uninterrupted));
+
+    // Split again, this time after the impact: the contact's recorded
+    // outcome (cleared, impact tick/speed/energy) must itself survive the
+    // round trip, not just the trajectory that led to it.
+    const after = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(after, 5000);
+    stepUntilImpact(after);
+    const impactTick = after.contactState.impactTick[0]!;
+    const bytesAfter = serializeSim(after);
+    const reloadedAfter = deserializeSim({ scenario: contactScenario(1e9), bytes: bytesAfter });
+    expect(reloadedAfter.contactState.cleared[0]).toBe(1);
+    expect(reloadedAfter.contactState.impactTick[0]).toBe(impactTick);
+    expect(reloadedAfter.contactState.impactSpeed[0]).toBe(after.contactState.impactSpeed[0]);
+    expect(reloadedAfter.contactState.impactEnergy[0]).toBe(after.contactState.impactEnergy[0]);
+
+    run(reloadedAfter, [], 50);
+    run(after, [], 50);
+    expect(hashSim(reloadedAfter)).toBe(hashSim(after));
+  });
+
+  test('hash sensitivity: flipping a contact state field changes hashSim', () => {
+    const sim = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(sim, 5000);
+    stepUntilImpact(sim);
+    const before = hashSim(sim);
+
+    sim.contactState.cleared[0] = sim.contactState.cleared[0]! ? 0 : 1;
+    expect(hashSim(sim)).not.toBe(before);
+
+    sim.contactState.cleared[0] = sim.contactState.cleared[0]! ? 0 : 1; // restore
+    expect(hashSim(sim)).toBe(before);
+
+    sim.contactState.impactEnergy[0] = sim.contactState.impactEnergy[0]! + 1;
+    expect(hashSim(sim)).not.toBe(before);
+  });
+
+  test('hash sensitivity: flipping an object hitContact changes hashSim', () => {
+    const sim = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(sim, 5000);
+    run(sim, [], 1);
+    const before = hashSim(sim);
+
+    sim.objects.hitContact[0] = 0;
+    expect(hashSim(sim)).not.toBe(before);
+  });
+
+  test('a due burn node for a contact-expended probe is dropped, not armed', () => {
+    // minimumImpactEnergy well below what a 5000 m/s, 1000 kg impact
+    // delivers (~1.25e10 J): the probe clears the contact and is expended.
+    const sim = createSim({ scenario: contactScenario(1e9), seed: 1 });
+    seedAimedProbe(sim, 5000);
+    stepUntilImpact(sim);
+    expect(sim.objects.hitContact[0]).toBe(0);
+    expect(sim.objects.hitBody[0]).toBe(-1); // expended by the contact, not the body
+
+    const dueTick = sim.tick + 5;
+    sim.pending.object[0] = 0;
+    sim.pending.atTick[0] = dueTick;
+    sim.pending.prograde[0] = 100_000;
+    sim.pending.lateral[0] = 0;
+    sim.pending.count = 1;
+
+    run(sim, [], dueTick - sim.tick + 1);
+    expect(sim.objects.burning[0]).toBe(0); // never arms
+    expect(sim.pending.count).toBe(0); // dropped once due
   });
 });
 
