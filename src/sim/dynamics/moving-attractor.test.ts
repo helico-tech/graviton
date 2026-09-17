@@ -7,9 +7,18 @@
 import { describe, expect, test } from 'vitest';
 import { createBodyTable, evaluateEphemeris } from '../ephemeris/bodies.ts';
 import type { EphemerisOut } from '../ephemeris/bodies.ts';
+import { createContactState, createContactTable } from '../contacts.ts';
 import { createHash, digest, updateFloat64 } from '../state/hash.ts';
 import { createDynamicObjects, createStepScratch, stepTick } from './step.ts';
 import type { DynamicObjects } from './step.ts';
+
+// GRV-0015: this file predates fixed contacts and stays contact-free; the
+// empty table needs no bodies of its own to validate against.
+const NO_CONTACTS = createContactTable(
+  [],
+  createBodyTable([{ parent: -1, mu: 1, radius: 1, rotationPeriod: 1, axialPhaseAtEpoch: 0 }]),
+);
+const NO_CONTACT_STATE = createContactState(0);
 
 const MU_SUN = 1.32712440018e20;
 const MU_JUPITER = 1.26687e17;
@@ -115,9 +124,17 @@ function run(): RunResult {
   objects.hitBody[0] = -1;
 
   const tickEnd = -tick0;
-  const scratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+  const scratch = createStepScratch({ bodies, contacts: NO_CONTACTS, dt: DT, capacity: 1 });
   for (let tick = tick0; tick < tickEnd; tick++) {
-    stepTick({ bodies, objects, tick, dt: DT, scratch });
+    stepTick({
+      bodies,
+      objects,
+      contacts: NO_CONTACTS,
+      contactState: NO_CONTACT_STATE,
+      tick,
+      dt: DT,
+      scratch,
+    });
   }
 
   const ephEnd: EphemerisOut = {

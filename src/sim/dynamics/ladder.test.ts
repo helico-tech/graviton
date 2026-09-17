@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import { createBodyTable, evaluateEphemeris } from '../ephemeris/bodies.ts';
 import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
+import { createContactTable } from '../contacts.ts';
 import { computeKDyn, L_MAX, substepLevel, ZETA } from './ladder.ts';
 
 function singleBody(mu: number): { bodies: BodyTable; eph: EphemerisOut } {
@@ -250,5 +251,148 @@ describe('burn ladder term', () => {
     // tank runs dry inside the next tick (dt = 60 s): dt/2 = 30 > 22.5,
     // dt/4 = 15 <= 22.5, so the tank-aware term must land on level 2.
     expect(substepLevel({ ...args, dryMass: 1497 })).toBe(2);
+  });
+});
+
+// GRV-0015: the crossing ladder against a fixed contact, research §B.4's
+// fix for "the substep ladder as specified does not refine on the target" --
+// a probe closing on a contact in open space, far from any body, must still
+// refine.
+describe('contact crossing ladder term', () => {
+  const NEGLIGIBLE_MU = 1; // keeps the body terms at L = 0
+  const CAPTURE_RADIUS = 40000;
+
+  function contactFixture() {
+    const { bodies, eph } = singleBody(NEGLIGIBLE_MU);
+    const contacts = createContactTable(
+      [{ host: 0, longitude: 0, captureRadius: CAPTURE_RADIUS, minimumImpactEnergy: 1e12 }],
+      bodies,
+    );
+    // Contact sits far from the negligible-mass body, at rest -- position
+    // chosen independently of the body's own (negligible) influence.
+    const contactEph: EphemerisOut = {
+      x: new Float64Array([1e10]),
+      y: new Float64Array([0]),
+      vx: new Float64Array([0]),
+      vy: new Float64Array([0]),
+    };
+    return { bodies, eph, contacts, contactEph };
+  }
+
+  test('raises the level on approach in open space, far from any body', () => {
+    const { bodies, eph, contacts, contactEph } = contactFixture();
+    const kDyn = computeKDyn(bodies, DT);
+    // Far from the contact: r stays well above captureRadius, dt*vRel is
+    // small relative to zeta*r -- level 0.
+    const far = substepLevel({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]! - 1e9,
+      y: 0,
+      vx: 3e5,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    });
+    // Close to the contact, same closing speed: r is small, dt*vRel exceeds
+    // zeta*r, forcing a finer level.
+    const close = substepLevel({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]! - CAPTURE_RADIUS * 2,
+      y: 0,
+      vx: 3e5,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    });
+    expect(far).toBe(0);
+    expect(close).toBeGreaterThan(far);
+  });
+
+  test('flips level exactly at dt*vRel = zeta*rFloored, using the floored (captureRadius) r', () => {
+    const { bodies, eph, contacts, contactEph } = contactFixture();
+    const kDyn = computeKDyn(bodies, DT);
+    // x placed exactly at the contact: r = 0, floored to captureRadius, so
+    // the boundary is the same crossingLevel formula with r = captureRadius.
+    const vBoundary = (ZETA * CAPTURE_RADIUS) / DT;
+    const below = vBoundary * (1 - 1e-6);
+    const above = vBoundary * (1 + 1e-6);
+    const argsFor = (vx: number) => ({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]!,
+      y: 0,
+      vx,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    });
+    expect(substepLevel(argsFor(below))).toBe(0);
+    expect(substepLevel(argsFor(above))).toBe(1);
+  });
+
+  test('the loop never chases r -> 0: level stays bounded exactly on top of the contact', () => {
+    const { bodies, eph, contacts, contactEph } = contactFixture();
+    const kDyn = computeKDyn(bodies, DT);
+    const closingSpeed = 2000; // m/s -- comfortably below the L_MAX boundary
+    // Sitting exactly on the contact: without the floor, r=0 would make
+    // zeta*r=0 and the crossing loop would run to L_MAX for any nonzero
+    // speed; with the floor, this is exactly the r = captureRadius case, no
+    // different from being captureRadius away.
+    const onContact = substepLevel({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]!,
+      y: contactEph.y[0]!,
+      vx: closingSpeed,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    });
+    const atCaptureRadius = substepLevel({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]! - CAPTURE_RADIUS,
+      y: 0,
+      vx: closingSpeed,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    });
+    expect(onContact).toBe(atCaptureRadius);
+    expect(onContact).toBeLessThan(L_MAX);
+  });
+
+  test('is identical whether the contact is cleared or not (the ladder never reads cleared state)', () => {
+    // substepLevel takes no `cleared` input at all -- this test documents
+    // that omission is deliberate: the same ContactTable/contactEph, with
+    // no cleared flag threaded through, yields the same level regardless of
+    // any caller's notion of cleared (ghost isolation, GRV-0015).
+    const { bodies, eph, contacts, contactEph } = contactFixture();
+    const kDyn = computeKDyn(bodies, DT);
+    const args = {
+      bodies,
+      kDyn,
+      dt: DT,
+      x: contactEph.x[0]! - CAPTURE_RADIUS * 2,
+      y: 0,
+      vx: 3e5,
+      vy: 0,
+      eph,
+      contacts,
+      contactEph,
+    };
+    expect(substepLevel(args)).toBe(substepLevel(args));
   });
 });

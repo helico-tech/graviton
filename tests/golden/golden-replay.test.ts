@@ -57,6 +57,13 @@ function loadGolden(name: string): GoldenFile {
   return JSON.parse(fs.readFileSync(file, 'utf8')) as GoldenFile;
 }
 
+/** Every committed golden (GRV-0015: golden replay, banned-Math replay,
+ *  headless and the e2e parity run all cover every file here, not just
+ *  flyby-burn). */
+function goldenNames(): string[] {
+  return fs.readdirSync(import.meta.dirname).filter((name) => name.endsWith('.json'));
+}
+
 function replay(golden: GoldenFile): string {
   const sim = createSim({ scenario: golden.scenario, seed: golden.seed });
   advance({ sim, log: golden.log, ticks: golden.ticks });
@@ -105,12 +112,37 @@ function maxSubstepLevel(golden: GoldenFile): number {
   return max;
 }
 
-describe('golden replay: flyby-burn', () => {
-  const golden = loadGolden('flyby-burn.json');
+describe.each(goldenNames())('golden replay: %s', (name) => {
+  const golden = loadGolden(name);
 
   test('replays to the stored hash', () => {
     expect(replay(golden)).toBe(golden.expectedHash);
   });
+
+  test('replays to the same hash with every banned Math member stubbed to throw', () => {
+    const originals = new Map<string, unknown>();
+    for (const bannedName of BANNED_MATH) {
+      originals.set(bannedName, (Math as unknown as Record<string, unknown>)[bannedName]);
+      (Math as unknown as Record<string, unknown>)[bannedName] = () => {
+        throw new Error(`Math.${bannedName} is banned in src/sim (ADR-0002)`);
+      };
+    }
+    try {
+      // The startup self-check must run clean under the stubs too: it only
+      // ever touches dsin/dcos/datan2/dexp/dlog/solveKepler, none of which
+      // call a banned Math member.
+      expect(() => checkGoldenVector(KERNEL_GOLDEN)).not.toThrow();
+      expect(replay(golden)).toBe(golden.expectedHash);
+    } finally {
+      for (const [bannedName, original] of originals) {
+        (Math as unknown as Record<string, unknown>)[bannedName] = original;
+      }
+    }
+  });
+});
+
+describe('golden replay: flyby-burn (scenario-specific)', () => {
+  const golden = loadGolden('flyby-burn.json');
 
   test('the flyby genuinely exercises the substep ladder above level 0', () => {
     expect(maxSubstepLevel(golden)).toBeGreaterThan(0);
@@ -123,25 +155,38 @@ describe('golden replay: flyby-burn', () => {
     expect(sim.objects.burnDelivered[0]).toBeGreaterThan(0);
     expect(sim.objects.hitBody[0]).toBe(-1); // the flyby never collides
   });
+});
 
-  test('replays to the same hash with every banned Math member stubbed to throw', () => {
-    const originals = new Map<string, unknown>();
-    for (const name of BANNED_MATH) {
-      originals.set(name, (Math as unknown as Record<string, unknown>)[name]);
-      (Math as unknown as Record<string, unknown>)[name] = () => {
-        throw new Error(`Math.${name} is banned in src/sim (ADR-0002)`);
-      };
-    }
-    try {
-      // The startup self-check must run clean under the stubs too: it only
-      // ever touches dsin/dcos/datan2/dexp/dlog/solveKepler, none of which
-      // call a banned Math member.
-      expect(() => checkGoldenVector(KERNEL_GOLDEN)).not.toThrow();
-      expect(replay(golden)).toBe(golden.expectedHash);
-    } finally {
-      for (const [name, original] of originals) {
-        (Math as unknown as Record<string, unknown>)[name] = original;
-      }
-    }
+describe('golden replay: intercept (scenario-specific)', () => {
+  const golden = loadGolden('intercept.json');
+
+  test('the probe clears the launched-from rail, impacts and clears the contact', () => {
+    const sim: Sim = createSim({ scenario: golden.scenario, seed: golden.seed });
+    advance({ sim, log: golden.log, ticks: golden.ticks });
+    expect(sim.objects.hitBody[0]).toBe(-1); // caught by the contact, never the body
+    expect(sim.objects.hitContact[0]).toBe(0);
+    expect(sim.contactState.cleared[0]).toBe(1);
+    expect(sim.contactState.impactEnergy[0]).toBeGreaterThan(
+      sim.scenario.contacts[0]!.minimumImpactEnergy,
+    );
+  });
+
+  // Not a golden (no stored hash): the same launch and contact geometry,
+  // with minimumImpactEnergy raised above the ~1.59e12 J the impact
+  // actually delivers (docs/evidence/GRV-0015) -- the probe must still be
+  // expended and the impact recorded, but the contact stays uncleared.
+  test('the same hit with a higher minimumImpactEnergy leaves the contact uncleared but records it', () => {
+    const scenario = {
+      ...golden.scenario,
+      contacts: golden.scenario.contacts.map((c) => ({ ...c, minimumImpactEnergy: 5e12 })),
+    };
+    const sim: Sim = createSim({ scenario, seed: golden.seed });
+    advance({ sim, log: golden.log, ticks: golden.ticks });
+    expect(sim.objects.hitContact[0]).toBe(0); // still expended by the contact
+    expect(sim.objects.hitBody[0]).toBe(-1);
+    expect(sim.contactState.cleared[0]).toBe(0); // but this time it doesn't break up
+    expect(sim.contactState.impactTick[0]).toBeGreaterThanOrEqual(0);
+    expect(sim.contactState.impactEnergy[0]).toBeGreaterThan(0);
+    expect(sim.contactState.impactEnergy[0]).toBeLessThan(5e12);
   });
 });

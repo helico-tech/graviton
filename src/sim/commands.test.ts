@@ -35,6 +35,7 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
       { parent: -1, mu: MU, radius: RADIUS, rotationPeriod: ROTATION_PERIOD, axialPhaseAtEpoch: 0 },
     ],
     rails: [DEFAULT_RAIL],
+    contacts: [],
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection'],
     ...overrides,

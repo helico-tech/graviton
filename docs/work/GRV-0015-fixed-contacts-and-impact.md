@@ -1,7 +1,7 @@
 ---
 id: GRV-0015
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0015 Fixed contacts and impact
 
@@ -29,3 +29,15 @@ decided on the swept segment, and impact energy decides whether it clears (GAME-
   golden in `tests/golden/`. `SIM_VERSION` moves only if `flyby-burn` results move.
 
 **Verification.** `pnpm check`, `pnpm e2e`, `pnpm headless` on both goldens.
+
+**Delivered.** `src/sim/contacts.ts` (new): `FixedContactDef`/`createContactTable`, `ContactState`/
+`createContactState`, `contactPoint` (single query) and `evaluateContacts` (no-allocation batch
+form, step.ts's hot path). `rails.ts`'s launch-point geometry extracted into a shared
+`surfacePoint`, reused by both a rail's muzzle and a contact. `step.ts`'s `stepTick` tests every
+fixed contact's swept segment before the body-surface test each substep, expends the probe
+(`hitContact`, frozen alongside `hitBody`) and records/clears the contact; `ladder.ts`'s
+`substepLevel` gained the contact crossing term (floored at capture radius, independent of
+cleared). `SIM_VERSION` 2 -> 3 (hash domain grew even though `flyby-burn`'s own trajectory did
+not -- verified bit-for-bit, see evidence). `tests/golden/intercept.json` added; both goldens now
+covered generically by `golden-replay.test.ts` and `tests/e2e/parity.spec.ts`. See
+`docs/evidence/GRV-0015/README.md`.

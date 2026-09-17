@@ -4,9 +4,18 @@
 import { describe, expect, test } from 'vitest';
 import { createBodyTable } from '../ephemeris/bodies.ts';
 import type { BodyTable } from '../ephemeris/bodies.ts';
+import { createContactState, createContactTable } from '../contacts.ts';
 import { startBurn } from './burn.ts';
 import { createDynamicObjects, createStepScratch, stepTick } from './step.ts';
 import type { DynamicObjects } from './step.ts';
+
+// GRV-0015: this file predates fixed contacts and stays contact-free; the
+// empty table needs no bodies of its own to validate against.
+const NO_CONTACTS = createContactTable(
+  [],
+  createBodyTable([{ parent: -1, mu: 1, radius: 1, rotationPeriod: 1, axialPhaseAtEpoch: 0 }]),
+);
+const NO_CONTACT_STATE = createContactState(0);
 
 const DT = 60;
 const WET_MASS = 1500;
@@ -76,9 +85,22 @@ function runToCompletion(objects: DynamicObjects, dvRequested: number, margin = 
     (WET_MASS - DRY_MASS) / MDOT,
   );
   const nTicks = Math.ceil(tBurn / DT) + margin;
-  const scratch = createStepScratch({ bodies, dt: DT, capacity: objects.count });
+  const scratch = createStepScratch({
+    bodies,
+    contacts: NO_CONTACTS,
+    dt: DT,
+    capacity: objects.count,
+  });
   for (let tick = 0; tick < nTicks; tick++) {
-    stepTick({ bodies, objects, tick, dt: DT, scratch });
+    stepTick({
+      bodies,
+      objects,
+      contacts: NO_CONTACTS,
+      contactState: NO_CONTACT_STATE,
+      tick,
+      dt: DT,
+      scratch,
+    });
   }
 }
 
@@ -209,9 +231,17 @@ describe('frozen direction', () => {
     expect(nx0).toBeCloseTo(0, 15);
     expect(ny0).toBeCloseTo(1, 15);
 
-    const scratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+    const scratch = createStepScratch({ bodies, contacts: NO_CONTACTS, dt: DT, capacity: 1 });
     for (let tick = 0; tick < 5 && objects.burning[i]; tick++) {
-      stepTick({ bodies, objects, tick, dt: DT, scratch });
+      stepTick({
+        bodies,
+        objects,
+        contacts: NO_CONTACTS,
+        contactState: NO_CONTACT_STATE,
+        tick,
+        dt: DT,
+        scratch,
+      });
     }
     // Still mid-burn (5 ticks * 60 s = 300 s < ~756 s burn time), velocity
     // direction has visibly rotated away from the frozen n...
@@ -232,9 +262,17 @@ describe('ghost isolation with a burning probe', () => {
 
     const alone = createDynamicObjects(1);
     seedProbe(alone, { prograde: 500, lateral: 0 });
-    const aloneScratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+    const aloneScratch = createStepScratch({ bodies, contacts: NO_CONTACTS, dt: DT, capacity: 1 });
     for (let tick = 0; tick < nTicks; tick++) {
-      stepTick({ bodies, objects: alone, tick, dt: DT, scratch: aloneScratch });
+      stepTick({
+        bodies,
+        objects: alone,
+        contacts: NO_CONTACTS,
+        contactState: NO_CONTACT_STATE,
+        tick,
+        dt: DT,
+        scratch: aloneScratch,
+      });
     }
 
     const crowd = createDynamicObjects(201);
@@ -254,9 +292,22 @@ describe('ghost isolation with a burning probe', () => {
         startBurn({ objects: crowd, index: j, prograde: 50 + k, lateral: (k % 2) * 20 });
       }
     }
-    const crowdScratch = createStepScratch({ bodies, dt: DT, capacity: 201 });
+    const crowdScratch = createStepScratch({
+      bodies,
+      contacts: NO_CONTACTS,
+      dt: DT,
+      capacity: 201,
+    });
     for (let tick = 0; tick < nTicks; tick++) {
-      stepTick({ bodies, objects: crowd, tick, dt: DT, scratch: crowdScratch });
+      stepTick({
+        bodies,
+        objects: crowd,
+        contacts: NO_CONTACTS,
+        contactState: NO_CONTACT_STATE,
+        tick,
+        dt: DT,
+        scratch: crowdScratch,
+      });
     }
 
     expect(Object.is(crowd.x[0], alone.x[0])).toBe(true);
@@ -276,20 +327,41 @@ describe('batch invariance with a multi-tick burn', () => {
 
     const whole = createDynamicObjects(1);
     seedProbe(whole, { prograde: 1000, lateral: 0 });
-    const wholeScratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+    const wholeScratch = createStepScratch({ bodies, contacts: NO_CONTACTS, dt: DT, capacity: 1 });
     for (let tick = 0; tick < nTicks; tick++) {
-      stepTick({ bodies, objects: whole, tick, dt: DT, scratch: wholeScratch });
+      stepTick({
+        bodies,
+        objects: whole,
+        contacts: NO_CONTACTS,
+        contactState: NO_CONTACT_STATE,
+        tick,
+        dt: DT,
+        scratch: wholeScratch,
+      });
     }
 
     const batched = createDynamicObjects(1);
     seedProbe(batched, { prograde: 1000, lateral: 0 });
-    const batchedScratch = createStepScratch({ bodies, dt: DT, capacity: 1 });
+    const batchedScratch = createStepScratch({
+      bodies,
+      contacts: NO_CONTACTS,
+      dt: DT,
+      capacity: 1,
+    });
     const batches = [7, 23, 1, 19, 10]; // arbitrary, sums to nTicks
     expect(batches.reduce((a, b) => a + b, 0)).toBe(nTicks);
     let tick = 0;
     for (const size of batches) {
       for (let k = 0; k < size; k++, tick++) {
-        stepTick({ bodies, objects: batched, tick, dt: DT, scratch: batchedScratch });
+        stepTick({
+          bodies,
+          objects: batched,
+          contacts: NO_CONTACTS,
+          contactState: NO_CONTACT_STATE,
+          tick,
+          dt: DT,
+          scratch: batchedScratch,
+        });
       }
     }
 

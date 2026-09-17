@@ -16,11 +16,14 @@ import { applyCommand } from './commands.ts';
 import type { Command } from './commands.ts';
 import { createRailTable, NEVER_LAUNCHED } from './rails.ts';
 import type { RailDef, RailTable } from './rails.ts';
+import { createContactState, createContactTable } from './contacts.ts';
+import type { ContactState, ContactTable, FixedContactDef } from './contacts.ts';
 import { SIM_VERSION } from './version.ts';
 
 // Re-exported so callers building a Scenario only need to import from
-// sim.ts, not reach into ephemeris/bodies.ts or rails.ts directly.
-export type { BodyDef, RailDef };
+// sim.ts, not reach into ephemeris/bodies.ts, rails.ts or contacts.ts
+// directly.
+export type { BodyDef, RailDef, FixedContactDef };
 
 export interface ProbeDef {
   dryMass: number;
@@ -41,6 +44,7 @@ export interface Scenario {
   burnNodeCapacity: number;
   bodies: BodyDef[];
   rails: RailDef[];
+  contacts: FixedContactDef[];
   probe: ProbeDef;
   /** Named random streams to create, e.g. ['debris_ejection']. Order fixes
    *  both creation and serialisation order. */
@@ -73,6 +77,11 @@ export interface Sim {
   /** Derived from `scenario.rails` alone -- NOT part of hashSim/serializeSim
    *  (mirrors `bodies`); `railLastLaunchTick` below is the mutable state. */
   rails: RailTable;
+  /** Derived from `scenario.contacts` alone -- NOT part of hashSim/
+   *  serializeSim (mirrors `bodies`/`rails`); `contactState` below is the
+   *  mutable state (GRV-0015). */
+  contacts: ContactTable;
+  contactState: ContactState;
   objects: DynamicObjects;
   /** Derived from `scenario` alone -- NOT part of hashSim/serializeSim,
    *  rebuilt by deserializeSim (research §8.3). */
@@ -137,14 +146,17 @@ export function createSim({ scenario, seed }: { scenario: Scenario; seed: number
   validateScenario(scenario);
   const bodies = createBodyTable(scenario.bodies);
   const rails = createRailTable(scenario.rails, bodies);
+  const contacts = createContactTable(scenario.contacts, bodies);
   return {
     scenario,
     tick: 0,
     seed,
     bodies,
     rails,
+    contacts,
+    contactState: createContactState(contacts.count),
     objects: createDynamicObjects(scenario.capacity),
-    scratch: createStepScratch({ bodies, dt: scenario.dt, capacity: scenario.capacity }),
+    scratch: createStepScratch({ bodies, contacts, dt: scenario.dt, capacity: scenario.capacity }),
     streams: scenario.streams.map((name) => createStream({ seed, name })),
     pending: createPendingBurnNodes(scenario.burnNodeCapacity),
     railLastLaunchTick: new Int32Array(rails.count).fill(NEVER_LAUNCHED),
@@ -174,8 +186,9 @@ function removePendingNode(pending: PendingBurnNodes, index: number): void {
  *  nodes are left in place, never reordered, so a later node can never fire
  *  ahead of an earlier one it happened to be checked after. Once a node's
  *  `atTick` is in the future nothing further in the (sorted) queue is due
- *  either, so the scan stops there. A due node whose probe has already hit
- *  a body is dropped rather than waited on: a hit probe never becomes free
+ *  either, so the scan stops there. A due node whose probe is already
+ *  expended (hit a body, or hit/cleared a fixed contact -- GRV-0015) is
+ *  dropped rather than waited on: an expended probe never becomes free
  *  (see the comment inside), so waiting would stall every node behind it. */
 function activateDueBurnNodes(sim: Sim): void {
   const pending = sim.pending;
@@ -183,11 +196,12 @@ function activateDueBurnNodes(sim: Sim): void {
   while (i < pending.count) {
     if (pending.atTick[i]! > sim.tick) break;
     const object = pending.object[i]!;
-    // A hit probe is frozen (every kick skips it, research §3.4): arming it
-    // would leave `burning` set forever and stall any node still behind it
-    // in the queue. Drop the node instead -- removePendingNode's stable
-    // shift keeps this deterministic and leaves other probes' nodes alone.
-    if (sim.objects.hitBody[object] !== -1) {
+    // An expended probe is frozen (every kick skips it, research §3.4):
+    // arming it would leave `burning` set forever and stall any node still
+    // behind it in the queue. Drop the node instead -- removePendingNode's
+    // stable shift keeps this deterministic and leaves other probes' nodes
+    // alone.
+    if (sim.objects.hitBody[object] !== -1 || sim.objects.hitContact[object] !== -1) {
       removePendingNode(pending, i);
       continue;
     }
@@ -248,6 +262,8 @@ export function advance({ sim, log, ticks }: AdvanceArgs): void {
     stepTick({
       bodies: sim.bodies,
       objects: sim.objects,
+      contacts: sim.contacts,
+      contactState: sim.contactState,
       tick: sim.tick,
       dt: sim.scenario.dt,
       scratch: sim.scratch,
@@ -258,8 +274,9 @@ export function advance({ sim, log, ticks }: AdvanceArgs): void {
 
 /** Hex digest over tick, seed, count, every live object array prefix
  *  (including hitBody/burning as words), pending nodes, rail last-launch
- *  ticks, and stream words. Derived scratch, bodies and rails (the static
- *  tables) are excluded. */
+ *  ticks, rail last-launch ticks, and stream words -- and, per contact
+ *  (GRV-0015), cleared/impactTick/impactSpeed/impactEnergy. Derived
+ *  scratch, bodies, rails and contacts (the static tables) are excluded. */
 export function hashSim(sim: Sim): string {
   const state = createHash();
   updateWord(state, sim.tick);
@@ -281,6 +298,7 @@ export function hashSim(sim: Sim): string {
     updateFloat64(state, o.burnTarget[i]!);
     updateFloat64(state, o.burnDelivered[i]!);
     updateWord(state, o.hitBody[i]!);
+    updateWord(state, o.hitContact[i]!);
     updateWord(state, o.burning[i]!);
   }
 
@@ -296,6 +314,14 @@ export function hashSim(sim: Sim): string {
     updateWord(state, sim.railLastLaunchTick[i]!);
   }
 
+  const cs = sim.contactState;
+  for (let i = 0; i < sim.contacts.count; i++) {
+    updateWord(state, cs.cleared[i]!);
+    updateWord(state, cs.impactTick[i]!);
+    updateFloat64(state, cs.impactSpeed[i]!);
+    updateFloat64(state, cs.impactEnergy[i]!);
+  }
+
   for (const stream of sim.streams) {
     updateWord(state, stream[0]!);
     updateWord(state, stream[1]!);
@@ -306,28 +332,33 @@ export function hashSim(sim: Sim): string {
   return digest(state);
 }
 
-// GRV-0014 adds a rail-state record (railLastLaunchTick) to the layout.
-const FORMAT_VERSION = 2;
+// GRV-0015 adds hitContact to the object record and a contact-state record
+// (cleared, impactTick, impactSpeed, impactEnergy per contact) to the
+// layout.
+const FORMAT_VERSION = 3;
 const HEADER_BYTES = 4 + 4; // formatVersion, simVersion
 const BODY_HEADER_BYTES = 4 + 4 + 4; // tick, seed, count
 // x y vx vy mass dryMass thrust exhaustVelocity burnNx burnNy burnTarget
-// burnDelivered (float64) + hitBody + burning (int32, for DataView-uniform
-// access -- burning only ever needs 1 byte, but the file has no hot-path
-// reason to bit-pack it).
-const OBJECT_RECORD_BYTES = 12 * 8 + 4 + 4;
+// burnDelivered (float64) + hitBody + hitContact + burning (int32, for
+// DataView-uniform access -- burning only ever needs 1 byte, but the file
+// has no hot-path reason to bit-pack it).
+const OBJECT_RECORD_BYTES = 12 * 8 + 4 + 4 + 4;
 const PENDING_RECORD_BYTES = 4 * 4; // object, atTick, prograde, lateral
 const RAIL_RECORD_BYTES = 4; // lastLaunchTick (int32)
+// cleared + impactTick (int32) + impactSpeed + impactEnergy (float64).
+const CONTACT_RECORD_BYTES = 4 + 4 + 8 + 8;
 const STREAM_RECORD_BYTES = 4 * 4; // four uint32 words
 
 /** `Uint8Array` (binary, doubles as raw bits): a little header (format
  *  version, SIM_VERSION), then tick/seed/count, then the live object
- *  prefix, pending nodes, rail last-launch ticks and stream words -- the
- *  same fields hashSim reads, in the same order. No TextEncoder, no
- *  platform globals: DataView and typed arrays only (ADR-0002). `scenario`
- *  and `scratch` are not written; deserializeSim rebuilds them from the
- *  scenario it is given (research §8.3: nothing derived belongs in the
- *  state). Rail count is not stored either -- like `streams.length`, it is
- *  fixed by `scenario.rails` and deserializeSim reads exactly that many. */
+ *  prefix, pending nodes, rail last-launch ticks, contact state and stream
+ *  words -- the same fields hashSim reads, in the same order. No
+ *  TextEncoder, no platform globals: DataView and typed arrays only
+ *  (ADR-0002). `scenario` and `scratch` are not written; deserializeSim
+ *  rebuilds them from the scenario it is given (research §8.3: nothing
+ *  derived belongs in the state). Rail and contact counts are not stored
+ *  either -- like `streams.length`, they are fixed by `scenario.rails`/
+ *  `scenario.contacts` and deserializeSim reads exactly that many. */
 export function serializeSim(sim: Sim): Uint8Array {
   const o = sim.objects;
   const byteLength =
@@ -337,6 +368,7 @@ export function serializeSim(sim: Sim): Uint8Array {
     4 +
     sim.pending.count * PENDING_RECORD_BYTES +
     sim.rails.count * RAIL_RECORD_BYTES +
+    sim.contacts.count * CONTACT_RECORD_BYTES +
     sim.streams.length * STREAM_RECORD_BYTES;
 
   const buffer = new ArrayBuffer(byteLength);
@@ -375,6 +407,7 @@ export function serializeSim(sim: Sim): Uint8Array {
     putF64(o.burnTarget[i]!);
     putF64(o.burnDelivered[i]!);
     putI32(o.hitBody[i]!);
+    putI32(o.hitContact[i]!);
     putI32(o.burning[i]!);
   }
 
@@ -388,6 +421,14 @@ export function serializeSim(sim: Sim): Uint8Array {
 
   for (let i = 0; i < sim.rails.count; i++) {
     putI32(sim.railLastLaunchTick[i]!);
+  }
+
+  const cs = sim.contactState;
+  for (let i = 0; i < sim.contacts.count; i++) {
+    putI32(cs.cleared[i]!);
+    putI32(cs.impactTick[i]!);
+    putF64(cs.impactSpeed[i]!);
+    putF64(cs.impactEnergy[i]!);
   }
 
   for (const stream of sim.streams) {
@@ -442,6 +483,7 @@ export function deserializeSim({
 
   const bodies = createBodyTable(scenario.bodies);
   const rails = createRailTable(scenario.rails, bodies);
+  const contacts = createContactTable(scenario.contacts, bodies);
   const objects = createDynamicObjects(scenario.capacity);
   objects.count = count;
   for (let i = 0; i < count; i++) {
@@ -458,6 +500,7 @@ export function deserializeSim({
     objects.burnTarget[i] = getF64();
     objects.burnDelivered[i] = getF64();
     objects.hitBody[i] = getI32();
+    objects.hitContact[i] = getI32();
     objects.burning[i] = getI32();
   }
 
@@ -478,6 +521,14 @@ export function deserializeSim({
   const railLastLaunchTick = new Int32Array(rails.count);
   for (let i = 0; i < rails.count; i++) railLastLaunchTick[i] = getI32();
 
+  const contactState = createContactState(contacts.count);
+  for (let i = 0; i < contacts.count; i++) {
+    contactState.cleared[i] = getI32();
+    contactState.impactTick[i] = getI32();
+    contactState.impactSpeed[i] = getF64();
+    contactState.impactEnergy[i] = getF64();
+  }
+
   const streams: Uint32Array[] = [];
   for (let s = 0; s < scenario.streams.length; s++) {
     const stream = new Uint32Array(4);
@@ -494,8 +545,10 @@ export function deserializeSim({
     seed,
     bodies,
     rails,
+    contacts,
+    contactState,
     objects,
-    scratch: createStepScratch({ bodies, dt: scenario.dt, capacity: scenario.capacity }),
+    scratch: createStepScratch({ bodies, contacts, dt: scenario.dt, capacity: scenario.capacity }),
     streams,
     pending,
     railLastLaunchTick,
