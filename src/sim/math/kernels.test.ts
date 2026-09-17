@@ -1,24 +1,15 @@
-// The 18 exact-match values are the research §2.6 cross-check: the same
+// The 15 exact-match values are the research §2.6 cross-check: the same
 // algorithm run independently in CPython 3.12 and Node 24 produced identical
 // bit patterns, reproduced directly from
 // docs/research/2026-09-03-02-simulation-numerics-probes/q3_crosscheck.py
 // (see docs/evidence/GRV-0003/README.md for how they and the <=2ulp grid
 // below were generated). Math.* is only ever used here as a loose sanity
 // bound or to build test inputs -- never as a source of truth, since it is
-// exactly what this file exists to not depend on.
+// exactly what this file exists to not depend on. The cross-check's other 3
+// values (Kepler E/sinE/cosE) live in src/sim/ephemeris/kepler.test.ts
+// (GRV-0005), against the real exported solver rather than a copy.
 import { describe, expect, test } from 'vitest';
-import {
-  dacos,
-  datan,
-  datan2,
-  dcos,
-  dcosOut,
-  dexp,
-  dlog,
-  dsin,
-  dsincos,
-  dsinOut,
-} from './kernels.ts';
+import { dacos, datan, datan2, dcos, dexp, dlog, dsin, dsincos } from './kernels.ts';
 
 const bits = new DataView(new ArrayBuffer(8));
 
@@ -106,35 +97,6 @@ describe('cross-runtime golden bit patterns (research §2.6)', () => {
     expectHex(dexp(2.5), '40285d6fd931e0bb');
     expectHex(dlog(7.5), '40001e85798eb9a3');
     expectHex(datan2(3, -4), '4003fc176b7a8560');
-  });
-
-  test('Danby-Kepler built from dsincos matches the cross-check E/sinE/cosE', () => {
-    // solveKepler itself belongs to GRV-0005 (ephemeris), not this unit; this
-    // reproduces just enough of ADR-0005's Kepler recipe, driven by our own
-    // dsincos, to prove dsincos feeds a real downstream computation
-    // bit-for-bit -- the actual claim research §2.6 makes for these 3 values.
-    const M = 1.0;
-    const e = 0.6;
-    let E = M + (M < Math.PI ? 0.85 * e : -0.85 * e);
-    let sE = 0;
-    let cE = 0;
-    let d = 0;
-    for (let i = 0; i < 3; i++) {
-      dsincos(E);
-      sE = dsinOut;
-      cE = dcosOut;
-      const f0 = E - e * sE - M;
-      const f1 = 1.0 - e * cE;
-      const f2 = e * sE;
-      const f3 = e * cE;
-      const d1 = -f0 / f1;
-      const d2 = -f0 / (f1 + 0.5 * d1 * f2);
-      d = -f0 / (f1 + 0.5 * d2 * f2 + (d2 * d2 * f3) / 6.0);
-      E = E + d;
-    }
-    expectHex(E, '3ff99891ef075f19');
-    expectHex(sE + cE * d, '3feffc911cc33d00');
-    expectHex(cE - sE * d, 'bf9da49742ff2801');
   });
 });
 
