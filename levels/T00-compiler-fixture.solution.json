@@ -1,0 +1,14 @@
+{
+  "level": "T00-compiler-fixture",
+  "log": [
+    {
+      "heading": 2570577009,
+      "kind": "launch",
+      "rail": 0,
+      "speed": 65426813,
+      "tick": 0
+    }
+  ],
+  "simVersion": 3,
+  "ticks": 220
+}

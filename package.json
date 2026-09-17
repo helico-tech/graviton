@@ -17,7 +17,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm levels:build --check",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm levels:build --check && pnpm levels:verify --check",
     "prepare": "git config core.hooksPath scripts/git-hooks",
     "docs:validate": "node scripts/validate-docs.ts",
     "work:new": "node scripts/new-work-item.ts",
@@ -25,7 +25,8 @@
     "headless": "node src/headless/run.ts",
     "e2e": "pnpm build && playwright test",
     "screenshot": "node scripts/screenshot.ts",
-    "levels:build": "node scripts/levels-build.ts"
+    "levels:build": "node scripts/levels-build.ts",
+    "levels:verify": "node scripts/levels-verify.ts"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "5.3.0",

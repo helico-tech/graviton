@@ -9,4 +9,6 @@ tests/golden/
 test-results/
 playwright-report/
 levels/*.level.json
+levels/*.evidence.json
+levels/*.solution.json
 levels/schema/

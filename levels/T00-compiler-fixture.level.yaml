@@ -5,6 +5,11 @@
 # understands (length, mass, duration including a compound one, speed, force, angle, energy).
 # Not a campaign level: compile.test.ts and the CLI's --check staleness test both load this
 # file's compiled JSON, and a test replays a few hundred ticks of it through the real simulation.
+#
+# Rail on the moon (tesh), contact on the planet (sadal) -- GRV-0017: the reverse pairing (rail on
+# the much larger planet, contact on the small moon) needs heading precision no analytic-aim
+# search converges on, since the moon's angular size from the rail is a few hundredths of a
+# degree; mirrors GRV-0015's own intercept golden shape (docs/evidence/GRV-0015/README.md).
 schema: 1
 id: T00-compiler-fixture
 name: Compiler Fixture
@@ -52,10 +57,10 @@ bodies:
       meanAnomalyAtEpoch: 34.4 deg
 
 rails:
-  - id: sadal-north
-    name: Sadal North Rail
-    host: sadal
-    longitude: 12.5 deg
+  - id: tesh-nearside
+    name: Tesh Nearside Rail
+    host: tesh
+    longitude: 180 deg
     muzzleSpeed: { min: 60 km/s, max: 300 km/s }
     headingCone: 69 deg
     reloadTime: 6 h
@@ -74,8 +79,8 @@ contacts:
   - kind: fixed
     id: tender-hulk
     name: Survey Tender (hulk)
-    host: tesh
-    longitude: 88.0 deg
+    host: sadal
+    longitude: 347 deg
     captureRadius: 40 km
     clearedBy:
-      minimumImpactEnergy: 2.4 TJ
+      minimumImpactEnergy: 1.5 TJ
