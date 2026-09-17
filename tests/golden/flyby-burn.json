@@ -1,0 +1,37 @@
+{
+  "scenario": {
+    "dt": 60,
+    "capacity": 4,
+    "bodies": [
+      { "parent": -1, "mu": 1.32712440018e20, "radius": 6.957e8 },
+      {
+        "parent": 0,
+        "mu": 1.26687e17,
+        "radius": 7.1492e7,
+        "a": 777908927640,
+        "e": 0.0489,
+        "argPeriapsis": 0.257,
+        "meanAnomaly0": 0.6
+      },
+      {
+        "parent": 1,
+        "mu": 5.959e12,
+        "radius": 1.8216e6,
+        "a": 4.217e8,
+        "e": 0.0041,
+        "argPeriapsis": 0,
+        "meanAnomaly0": 0
+      }
+    ],
+    "probe": { "dryMass": 400, "propellantMass": 400, "exhaustVelocity": 3000, "thrust": 500 },
+    "streams": ["debris_ejection"]
+  },
+  "seed": 12345,
+  "log": [
+    { "tick": 0, "kind": "launch", "body": 2, "heading": 49152, "speed": 30824000 },
+    { "tick": 2500, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
+  ],
+  "ticks": 6000,
+  "expectedHash": "e18434ee2785b566",
+  "simVersion": 1
+}
