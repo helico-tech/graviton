@@ -1,7 +1,7 @@
 ---
 id: GRV-0008
 epic: EPIC-02
-status: todo
+status: done
 ---
 # GRV-0008 Simulation state, command log and the determinism tests
 
@@ -26,3 +26,9 @@ out, with the contract's required tests guarding it.
   `docs/issues/2026-09-17-tick-allocates-argument-objects.md` by measurement.
 
 **Verification.** `pnpm check`, `pnpm build`, headless run output in `docs/evidence/GRV-0008/`.
+
+**Delivered.** `src/sim/sim.ts` (`Sim`, `createSim`, `advance`, `hashSim`, `serializeSim`/
+`deserializeSim`), `src/sim/commands.ts` (`applyCommand`, `Command`), `src/sim/selfcheck.ts`
+(`kernelGoldenVector`, `checkGoldenVector`, `selfCheck`), `src/headless/run.ts` (`runGolden`,
+the CLI), `tests/golden/flyby-burn.json` + `tests/golden/golden-replay.test.ts`. All required
+tests pass; see `docs/evidence/GRV-0008/README.md`.

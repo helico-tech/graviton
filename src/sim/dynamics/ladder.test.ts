@@ -207,4 +207,36 @@ describe('burn ladder term', () => {
     });
     expect(level).toBe(0);
   });
+
+  // docs/issues/2026-09-17-burn-ladder-term-ignores-tank-exhaustion.md: the
+  // ladder term must use min(t_target_remaining, (m - dryMass)/mdot), not
+  // t_target_remaining alone, or a tank that runs dry inside the next tick
+  // goes unrefined right when it matters most.
+  test('a tank-limited burn gets the finer level the target-only formula misses', () => {
+    const { bodies, eph } = singleBody(NEGLIGIBLE_MU);
+    const kDyn = computeKDyn(bodies, DT);
+    const args = {
+      bodies,
+      kDyn,
+      dt: DT,
+      x: 1e13,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      eph,
+      burning: 1,
+      mass: 1500,
+      thrust: THRUST,
+      exhaustVelocity: EXHAUST_VELOCITY,
+      burnTarget: 5000, // far from reached: t_target_remaining ~= 1726 s
+      burnDelivered: 0,
+    };
+    // Without dryMass, the ladder only sees the far-off delta-v target and
+    // stays coarse...
+    expect(substepLevel(args)).toBe(0);
+    // ...but with 3 kg of propellant left (tauDry = 3/mdot = 22.5 s), the
+    // tank runs dry inside the next tick (dt = 60 s): dt/2 = 30 > 22.5,
+    // dt/4 = 15 <= 22.5, so the tank-aware term must land on level 2.
+    expect(substepLevel({ ...args, dryMass: 1497 })).toBe(2);
+  });
 });

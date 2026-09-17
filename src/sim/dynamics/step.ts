@@ -137,6 +137,7 @@ export function stepTick({ bodies, objects, tick, dt, scratch }: StepTickArgs): 
       eph: scratch.eph,
       burning: objects.burning[i]!,
       mass: objects.mass[i]!,
+      dryMass: objects.dryMass[i]!,
       thrust: objects.thrust[i]!,
       exhaustVelocity: objects.exhaustVelocity[i]!,
       burnTarget: objects.burnTarget[i]!,
