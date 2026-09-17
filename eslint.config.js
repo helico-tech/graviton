@@ -30,6 +30,22 @@ export const BANNED_MATH = [
   'random',
 ];
 
+/** @param {number} levelsUp how many `../` take a file out of src/sim */
+function simImports(levelsUp) {
+  return [
+    'error',
+    {
+      patterns: [
+        {
+          group: [`${'../'.repeat(levelsUp)}*`],
+          message: 'src/sim imports nothing outside itself (ADR-0002).',
+        },
+        { regex: '^[^./]', message: 'src/sim imports no packages (ADR-0002).' },
+      ],
+    },
+  ];
+}
+
 export default defineConfig([
   globalIgnores(['docs/', 'dist/', 'node_modules/', 'runs/', '.playwright-cli/', 'test-results/']),
   js.configs.recommended,
@@ -87,15 +103,14 @@ export default defineConfig([
           message: '** is Math.pow; see ADR-0002.',
         },
       ],
-      'no-restricted-imports': [
-        'error',
-        {
-          patterns: [
-            { group: ['../*'], message: 'src/sim imports nothing outside itself (ADR-0002).' },
-            { regex: '^[^./]', message: 'src/sim imports no packages (ADR-0002).' },
-          ],
-        },
-      ],
+      'no-restricted-imports': simImports(1),
     },
   },
+  // The import patterns match the specifier's text, not the resolved path, so the number of
+  // `../` that leaves src/sim depends on the file's depth. Deeper files keep the strict default.
+  ...[2, 3].map((depth) => ({
+    files: [`src/sim/${'*/'.repeat(depth - 1)}*.ts`],
+    ignores: ['**/*.test.ts'],
+    rules: { 'no-restricted-imports': simImports(depth) },
+  })),
 ]);
