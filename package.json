@@ -22,7 +22,8 @@
     "docs:validate": "node scripts/validate-docs.ts",
     "work:new": "node scripts/new-work-item.ts",
     "issue": "node scripts/issues.ts",
-    "headless": "node src/headless/run.ts"
+    "headless": "node src/headless/run.ts",
+    "e2e": "pnpm build && playwright test"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "5.3.0",
@@ -30,6 +31,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "24.13.3",
     "eslint": "10.9.1",
     "globals": "17.12.0",
