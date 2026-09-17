@@ -1,7 +1,7 @@
 ---
 id: GRV-0011
 epic: EPIC-03
-status: todo
+status: done
 ---
 # GRV-0011 Debug API over the simulation and cross-engine hash parity
 
@@ -25,3 +25,8 @@ Firefox produce the Node hash for the golden log (ADR-0002 guard-rail 5, ADR-000
 - Before/after screenshots of the placeholder page and a clean console in the evidence.
 
 **Verification.** `pnpm check`, `pnpm build`, `pnpm e2e`, CI green.
+
+**Delivered.** `window.graviton` (with `?debug=1`) drives the real simulation headlessly; the
+`run()` hash and the `load`/`command`/`step` session hash both match the Node hash
+(`e18434ee2785b566`) in Chromium 153 and Firefox 155 for `tests/golden/flyby-burn.json`. Evidence
+in `docs/evidence/GRV-0011/`.
