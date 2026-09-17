@@ -1,8 +1,9 @@
 ---
-status: open
+status: resolved
 priority: P1
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0016
 ---
 # pnpm lint reads work in progress in .worktrees/
 
@@ -14,3 +15,5 @@ pushed); the gate was simply looking at files that are not part of the checkout.
 `.gitignore` and vitest/tsc are scoped to `src`, `scripts`, `tests`, so only ESLint was affected.
 
 ## Resolution
+
+**Resolved 2026-09-17** in GRV-0016, commit bc313c8. .worktrees/ added to ESLint's global ignores.
