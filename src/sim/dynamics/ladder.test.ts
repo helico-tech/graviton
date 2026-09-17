@@ -129,3 +129,82 @@ describe('crossing ladder', () => {
     expect(substepLevel({ bodies, kDyn, dt: DT, x: r, y: 0, vx: above, vy: 0, eph })).toBe(1);
   });
 });
+
+describe('burn ladder term', () => {
+  // research §3.6: m_wet 1500 kg, v_e 30 km/s, T 4 kN. The doc's own "a 10
+  // m/s burn lasts 3.75 s" is the linear approximation (m*dv/T); the exact
+  // rocket-equation value (what production code, and remForTBurn below,
+  // actually compute) is 3.7494 s -- just under the dt/16 = 3.75 boundary,
+  // one level finer than the prose's rounded illustration. Boundary probed
+  // directly instead of trusting that coincidence, matching the dynamical
+  // ladder's own boundary test above.
+  const NEGLIGIBLE_MU = 1; // keeps the dynamical/crossing terms at L = 0
+  const MASS = 1500;
+  const THRUST = 4000;
+  const EXHAUST_VELOCITY = 30000;
+  const MDOT = THRUST / EXHAUST_VELOCITY;
+
+  // Inverse of production's t_burn(rem) = (m/mdot)*(1 - exp(-rem/ve))
+  // (research §3.6), solved for the rem whose burn time is exactly
+  // tBurn. Math.exp/Math.log are fine here -- tests are exempt from
+  // src/sim's determinism lint (ADR-0002) -- and used only to derive an
+  // independent boundary to probe against, never inside the production
+  // code.
+  function remForTBurn(tBurn: number): number {
+    return -EXHAUST_VELOCITY * Math.log(1 - (tBurn * MDOT) / MASS);
+  }
+
+  test('flips level exactly at dt/2^L = t_burn_remaining, for two different L', () => {
+    const { bodies, eph } = singleBody(NEGLIGIBLE_MU);
+    const kDyn = computeKDyn(bodies, DT);
+    for (const L of [3, 5]) {
+      // tBoundary = dt/2^(L-1) sits just at the boundary between level
+      // L-1 and level L (burnLevel's halving loop); probed with a tiny
+      // independent margin on either side, converted to the rem that
+      // produces that burn time.
+      const tBoundary = DT / 2 ** (L - 1);
+      const below = remForTBurn(tBoundary * (1 - 1e-6));
+      const above = remForTBurn(tBoundary * (1 + 1e-6));
+      const argsFor = (rem: number) => ({
+        bodies,
+        kDyn,
+        dt: DT,
+        x: 1e13,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        eph,
+        burning: 1,
+        mass: MASS,
+        thrust: THRUST,
+        exhaustVelocity: EXHAUST_VELOCITY,
+        burnTarget: rem,
+        burnDelivered: 0,
+      });
+      expect(substepLevel(argsFor(below))).toBe(L);
+      expect(substepLevel(argsFor(above))).toBe(L - 1);
+    }
+  });
+
+  test('level returns to 0 once the burn has ended', () => {
+    const { bodies, eph } = singleBody(NEGLIGIBLE_MU);
+    const kDyn = computeKDyn(bodies, DT);
+    const level = substepLevel({
+      bodies,
+      kDyn,
+      dt: DT,
+      x: 1e13,
+      y: 0,
+      vx: 0,
+      vy: 0,
+      eph,
+      burning: 0,
+      mass: 1500,
+      thrust: THRUST,
+      exhaustVelocity: EXHAUST_VELOCITY,
+      burnTarget: 10,
+      burnDelivered: 10,
+    });
+    expect(level).toBe(0);
+  });
+});

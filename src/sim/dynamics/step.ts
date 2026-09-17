@@ -9,8 +9,9 @@
 // stage (research §3.4): after each substep the ephemeris is evaluated
 // again at the exact endpoint time, because the group's last kick stage
 // lands at a fraction of h short of the endpoint (XI+2*CHI+D3 =~ 0.8214),
-// not at the endpoint itself. Burn and contact terms are not part of this
-// unit (GRV-0007) and leave no stub here.
+// not at the endpoint itself. Finite burns (mass depletion, thrust kick,
+// ladder term) are pefrl.ts's and ladder.ts's (GRV-0007); the contact term
+// is not part of this unit and leaves no stub here.
 
 import { evaluateEphemeris } from '../ephemeris/bodies.ts';
 import type { BodyTable, EphemerisOut } from '../ephemeris/bodies.ts';
@@ -32,6 +33,15 @@ export function createDynamicObjects(capacity: number): DynamicObjects {
     vx: new Float64Array(capacity),
     vy: new Float64Array(capacity),
     hitBody,
+    mass: new Float64Array(capacity),
+    dryMass: new Float64Array(capacity),
+    thrust: new Float64Array(capacity),
+    exhaustVelocity: new Float64Array(capacity),
+    burnNx: new Float64Array(capacity),
+    burnNy: new Float64Array(capacity),
+    burnTarget: new Float64Array(capacity),
+    burnDelivered: new Float64Array(capacity),
+    burning: new Uint8Array(capacity),
   };
 }
 
@@ -125,6 +135,12 @@ export function stepTick({ bodies, objects, tick, dt, scratch }: StepTickArgs): 
       vx: objects.vx[i]!,
       vy: objects.vy[i]!,
       eph: scratch.eph,
+      burning: objects.burning[i]!,
+      mass: objects.mass[i]!,
+      thrust: objects.thrust[i]!,
+      exhaustVelocity: objects.exhaustVelocity[i]!,
+      burnTarget: objects.burnTarget[i]!,
+      burnDelivered: objects.burnDelivered[i]!,
     });
     const group = scratch.groupIndex[level]!;
     group[scratch.groupCount[level]!] = i;
