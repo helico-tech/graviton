@@ -13,6 +13,11 @@ export interface PrimaryBodyDef {
   parent: -1;
   mu: number;
   radius: number;
+  /** Seconds, > 0: rotation period (GAME-0001 §4.2). Spin is always
+   *  prograde -- counter-clockwise, the same sense as the orbits. */
+  rotationPeriod: number;
+  /** rad, surface phase at t=0. Rail launch windows read off this. */
+  axialPhaseAtEpoch: number;
 }
 
 export interface OrbitingBodyDef {
@@ -23,6 +28,8 @@ export interface OrbitingBodyDef {
   e: number;
   argPeriapsis: number;
   meanAnomaly0: number;
+  rotationPeriod: number;
+  axialPhaseAtEpoch: number;
 }
 
 export type BodyDef = PrimaryBodyDef | OrbitingBodyDef;
@@ -46,6 +53,12 @@ export interface BodyTable {
   g: Float64Array;
   cosArgPeriapsis: Float64Array;
   sinArgPeriapsis: Float64Array;
+  rotationPeriod: Float64Array;
+  axialPhaseAtEpoch: Float64Array;
+  /** 2*pi / rotationPeriod, precomputed once here (research §2.2: never
+   *  recompute a per-body constant per query). Used for a rail's surface
+   *  rotation velocity (rails.ts). */
+  angularRate: Float64Array;
 }
 
 export function createBodyTable(defs: BodyDef[]): BodyTable {
@@ -64,6 +77,9 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
     g: new Float64Array(count),
     cosArgPeriapsis: new Float64Array(count),
     sinArgPeriapsis: new Float64Array(count),
+    rotationPeriod: new Float64Array(count),
+    axialPhaseAtEpoch: new Float64Array(count),
+    angularRate: new Float64Array(count),
   };
 
   for (let i = 0; i < count; i++) {
@@ -74,6 +90,17 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
       throw new Error(
         `createBodyTable: body ${i} has non-positive or non-finite radius (${def.radius})`,
       );
+    if (!Number.isFinite(def.rotationPeriod) || def.rotationPeriod <= 0)
+      throw new Error(
+        `createBodyTable: body ${i} has non-positive or non-finite rotationPeriod (${def.rotationPeriod})`,
+      );
+    if (!Number.isFinite(def.axialPhaseAtEpoch))
+      throw new Error(
+        `createBodyTable: body ${i} has non-finite axialPhaseAtEpoch (${def.axialPhaseAtEpoch})`,
+      );
+    table.rotationPeriod[i] = def.rotationPeriod;
+    table.axialPhaseAtEpoch[i] = def.axialPhaseAtEpoch;
+    table.angularRate[i] = TWO_PI / def.rotationPeriod;
 
     // `'a' in def` rather than `def.parent === -1`: OrbitingBodyDef's
     // `parent` is typed `number`, not a literal, so it isn't a usable
@@ -169,4 +196,16 @@ export function evaluateEphemeris(table: BodyTable, t: number, out: EphemerisOut
     out.vx[i] = out.vx[p]! + pvx * C - pvy * S;
     out.vy[i] = out.vy[p]! + pvx * S + pvy * C;
   }
+}
+
+/** Rotation phase of `body`'s surface at time `t` (GAME-0001 §4.2, docs/
+ *  work/GRV-0014): the fraction of a turn since epoch is taken *before* the
+ *  2*pi multiply, so the value stays small -- and inside dsincos's domain
+ *  -- for any t, however large (research §2.2's reduce-before-trig rule).
+ *  Spin is always prograde: `axialPhaseAtEpoch` increases monotonically
+ *  with t because `rotationPeriod` is validated > 0. */
+export function surfacePhase(table: BodyTable, body: number, t: number): number {
+  const cycles = t / table.rotationPeriod[body]!;
+  const frac = cycles - Math.floor(cycles);
+  return table.axialPhaseAtEpoch[body]! + TWO_PI * frac;
 }

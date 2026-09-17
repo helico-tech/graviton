@@ -4,7 +4,13 @@
     "capacity": 4,
     "burnNodeCapacity": 4,
     "bodies": [
-      { "parent": -1, "mu": 1.32712440018e20, "radius": 6.957e8 },
+      {
+        "parent": -1,
+        "mu": 1.32712440018e20,
+        "radius": 6.957e8,
+        "rotationPeriod": 2200000,
+        "axialPhaseAtEpoch": 0
+      },
       {
         "parent": 0,
         "mu": 1.26687e17,
@@ -12,7 +18,9 @@
         "a": 777908927640,
         "e": 0.0489,
         "argPeriapsis": 0.257,
-        "meanAnomaly0": 0.6
+        "meanAnomaly0": 0.6,
+        "rotationPeriod": 35730,
+        "axialPhaseAtEpoch": 0
       },
       {
         "parent": 1,
@@ -21,7 +29,19 @@
         "a": 4.217e8,
         "e": 0.0041,
         "argPeriapsis": 0,
-        "meanAnomaly0": 0
+        "meanAnomaly0": 0,
+        "rotationPeriod": 152882,
+        "axialPhaseAtEpoch": 0
+      }
+    ],
+    "rails": [
+      {
+        "host": 2,
+        "longitude": 0,
+        "muzzleSpeedMin": 15000,
+        "muzzleSpeedMax": 60000,
+        "headingCone": 1.5707963267948966,
+        "reloadTicks": 100
       }
     ],
     "probe": { "dryMass": 400, "propellantMass": 400, "exhaustVelocity": 3000, "thrust": 500 },
@@ -29,10 +49,10 @@
   },
   "seed": 12345,
   "log": [
-    { "tick": 0, "kind": "launch", "body": 2, "heading": 3221225472, "speed": 30824000 },
+    { "tick": 0, "kind": "launch", "rail": 0, "heading": 3447904301, "speed": 35000000 },
     { "tick": 2500, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
   ],
   "ticks": 6000,
-  "expectedHash": "e18434ee2785b566",
-  "simVersion": 1
+  "expectedHash": "7bbff52a2e74df1a",
+  "simVersion": 2
 }
