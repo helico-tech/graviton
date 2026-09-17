@@ -2,9 +2,10 @@
 // is fine here -- tests are exempt from src/sim's determinism lint
 // (ADR-0002).
 import { describe, expect, test } from 'vitest';
-import { applyCommand } from './commands.ts';
+import { applyCommand, HEADING_TURN } from './commands.ts';
 import type { BurnCommand, LaunchCommand } from './commands.ts';
-import { createSim } from './sim.ts';
+import { dcosOut, dsincos, dsinOut } from './math/kernels.ts';
+import { advance, createSim } from './sim.ts';
 import type { Scenario, Sim } from './sim.ts';
 
 const DT = 60;
@@ -47,7 +48,8 @@ describe('launch', () => {
 
   test('a quarter turn points along +y', () => {
     const sim = makeSim();
-    applyCommand({ sim, command: launch({ heading: 16384, speed: 1_000_000 }) }); // 1/4 turn
+    // 1/4 turn: 16384/65536 in the old unit, ie. 16384*65536/2^32 in the new one.
+    applyCommand({ sim, command: launch({ heading: 16384 * 65536, speed: 1_000_000 }) });
     expect(sim.objects.x[0]).toBeCloseTo(0, 3);
     expect(sim.objects.y[0]).toBeCloseTo(RADIUS + 1000, 3);
     expect(sim.objects.vx[0]).toBeCloseTo(0, 6);
@@ -69,10 +71,15 @@ describe('launch', () => {
     expect(() => applyCommand({ sim, command: launch({ heading: 1.5 }) })).toThrow();
   });
 
-  test('throws on heading out of [0, 65535]', () => {
+  test('throws on heading out of [0, 2^32)', () => {
     const sim = makeSim();
-    expect(() => applyCommand({ sim, command: launch({ heading: 65536 }) })).toThrow();
+    expect(() => applyCommand({ sim, command: launch({ heading: 4294967296 }) })).toThrow();
     expect(() => applyCommand({ sim, command: launch({ heading: -1 }) })).toThrow();
+  });
+
+  test('accepts the maximum heading, 2^32 - 1', () => {
+    const sim = makeSim();
+    expect(() => applyCommand({ sim, command: launch({ heading: 4294967295 }) })).not.toThrow();
   });
 
   test('throws on a non-integer or negative speed', () => {
@@ -181,5 +188,68 @@ describe('tick validation', () => {
     const sim = makeSim();
     expect(() => applyCommand({ sim, command: launch({ tick: 1.5 }) })).toThrow();
     expect(() => applyCommand({ sim, command: launch({ tick: -1 }) })).toThrow();
+  });
+});
+
+// GRV-0013 (docs/adr/2026-09-17-0006 §4): heading moved from 1/65536 turn to
+// 1/2^32 turn. The rescale is a power of two, so a multiple of the old
+// quantum must produce the exact same direction bits the old formula gave --
+// checked directly rather than assumed, over a spread of old headings.
+describe('heading quantum', () => {
+  const TWO_PI = 6.283185307179586;
+  const OLD_HEADING_TURN = 65536; // the pre-GRV-0013 unit, 1/65536 of a turn
+
+  test('a heading that is a multiple of the old quantum gives the bit-identical direction the old formula gave', () => {
+    const oldHeadings = [0, 1, 16384, 32768, 65535];
+    for (let i = 0; i < 300; i++) oldHeadings.push(Math.floor(Math.random() * OLD_HEADING_TURN));
+
+    for (const oldHeading of oldHeadings) {
+      dsincos((oldHeading * TWO_PI) / OLD_HEADING_TURN);
+      const expectedNx = dcosOut;
+      const expectedNy = dsinOut;
+
+      // The command log's heading field, in the new unit: the old value
+      // scaled by a fixed literal 65536, exactly as the golden and every
+      // other fixture were rescaled -- not derived from HEADING_TURN, so
+      // this only passes once HEADING_TURN really is 2^32.
+      const newHeading = oldHeading * 65536;
+      dsincos((newHeading * TWO_PI) / HEADING_TURN);
+      expect(Object.is(dcosOut, expectedNx)).toBe(true);
+      expect(Object.is(dsinOut, expectedNy)).toBe(true);
+    }
+  });
+});
+
+// docs/work/GRV-0013-heading-quantum.md's acceptance: the whole point of the
+// finer quantum is that adjacent headings stay inside a capture radius while
+// the old quantum did not. Measured directly on a simple one-primary coast,
+// not asserted from the ADR's back-of-envelope number.
+describe('heading sensitivity over an eleven-day coast', () => {
+  const SPEED_MM_S = 200_000_000; // 200 km/s, relative to the primary
+  const COAST_TICKS = 15840; // 11 days at dt=60
+  const BASE_HEADING = 1_000_000_000; // arbitrary, well clear of both range edges
+  const OLD_QUANTUM = 65536; // the pre-GRV-0013 heading unit, expressed in new units
+
+  function finalPosition(heading: number): { x: number; y: number } {
+    const sim = makeSim({ capacity: 1, burnNodeCapacity: 0 });
+    applyCommand({ sim, command: launch({ heading, speed: SPEED_MM_S }) });
+    advance({ sim, log: [], ticks: COAST_TICKS });
+    return { x: sim.objects.x[0]!, y: sim.objects.y[0]! };
+  }
+
+  function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  test('two adjacent new-unit headings miss by under 1 km; one old quantum apart misses by thousands of km', () => {
+    const base = finalPosition(BASE_HEADING);
+    const adjacentMiss = distance(base, finalPosition(BASE_HEADING + 1));
+    const oldQuantumMiss = distance(base, finalPosition(BASE_HEADING + OLD_QUANTUM));
+
+    expect(adjacentMiss).toBeLessThan(1000); // under 1 km
+    expect(oldQuantumMiss).toBeGreaterThan(1_000_000); // thousands of km
+    expect(oldQuantumMiss).toBeGreaterThan(adjacentMiss * 1000); // scales with the unit ratio
   });
 });

@@ -29,7 +29,7 @@
   },
   "seed": 12345,
   "log": [
-    { "tick": 0, "kind": "launch", "body": 2, "heading": 49152, "speed": 30824000 },
+    { "tick": 0, "kind": "launch", "body": 2, "heading": 3221225472, "speed": 30824000 },
     { "tick": 2500, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
   ],
   "ticks": 6000,
