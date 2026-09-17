@@ -60,6 +60,35 @@ describe('createBodyTable validation', () => {
   test('accepts a valid table', () => {
     expect(() => createBodyTable([sun, earthlike])).not.toThrow();
   });
+
+  test.each([
+    ['radius', 0],
+    ['radius', -1],
+    ['radius', NaN],
+    ['radius', Infinity],
+    ['mu', NaN],
+    ['mu', Infinity],
+    ['a', NaN],
+    ['a', Infinity],
+    ['e', NaN],
+    ['argPeriapsis', NaN],
+    ['argPeriapsis', Infinity],
+    ['argPeriapsis', -Infinity],
+    ['meanAnomaly0', NaN],
+    ['meanAnomaly0', Infinity],
+  ])('throws when the orbiting body has %s = %p', (field, value) => {
+    expect(() => createBodyTable([sun, { ...earthlike, [field]: value }])).toThrow();
+  });
+
+  test.each([
+    ['radius', 0],
+    ['radius', -1],
+    ['radius', NaN],
+    ['mu', NaN],
+    ['mu', Infinity],
+  ])('throws when the primary body has %s = %p', (field, value) => {
+    expect(() => createBodyTable([{ ...sun, [field]: value }, earthlike])).toThrow();
+  });
 });
 
 describe('circular orbit', () => {

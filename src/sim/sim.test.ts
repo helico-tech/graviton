@@ -43,6 +43,67 @@ function run(sim: Sim, log: Command[], ticks: number): void {
   advance({ sim, log, ticks });
 }
 
+describe('scenario validation', () => {
+  const VALID_SCENARIO = scenario();
+  const VALID_BYTES = serializeSim(createSim({ scenario: VALID_SCENARIO, seed: 1 }));
+
+  test.each([
+    ['dt', 0],
+    ['dt', -1],
+    ['dt', NaN],
+    ['dt', Infinity],
+    ['capacity', 0],
+    ['capacity', -1],
+    ['capacity', 1.5],
+    ['capacity', NaN],
+    ['burnNodeCapacity', -1],
+    ['burnNodeCapacity', 1.5],
+    ['burnNodeCapacity', NaN],
+  ])('createSim and deserializeSim throw when scenario.%s is %p', (field, value) => {
+    const invalid = scenario({ [field]: value });
+    expect(() => createSim({ scenario: invalid, seed: 1 })).toThrow();
+    expect(() => deserializeSim({ scenario: invalid, bytes: VALID_BYTES })).toThrow();
+  });
+
+  test.each([
+    ['dryMass', 0],
+    ['dryMass', -1],
+    ['dryMass', NaN],
+    ['propellantMass', -1],
+    ['propellantMass', NaN],
+    ['thrust', 0],
+    ['thrust', -1],
+    ['thrust', NaN],
+    ['exhaustVelocity', 0],
+    ['exhaustVelocity', -1],
+    ['exhaustVelocity', NaN],
+  ])('createSim and deserializeSim throw when probe.%s is %p', (field, value) => {
+    const invalid = scenario({ probe: { ...VALID_SCENARIO.probe, [field]: value } });
+    expect(() => createSim({ scenario: invalid, seed: 1 })).toThrow();
+    expect(() => deserializeSim({ scenario: invalid, bytes: VALID_BYTES })).toThrow();
+  });
+
+  // The two failure modes demonstrated in docs/issues/2026-09-17-scenario-
+  // probe-and-body-radius-unvalidated.md: thrust: 0 arms a burn that never
+  // ends, exhaustVelocity: 0 makes mdot infinite.
+  test('createSim throws on the demonstrated thrust: 0 and exhaustVelocity: 0 cases', () => {
+    expect(() =>
+      createSim({ scenario: scenario({ probe: { ...VALID_SCENARIO.probe, thrust: 0 } }), seed: 1 }),
+    ).toThrow();
+    expect(() =>
+      createSim({
+        scenario: scenario({ probe: { ...VALID_SCENARIO.probe, exhaustVelocity: 0 } }),
+        seed: 1,
+      }),
+    ).toThrow();
+  });
+
+  test('accepts a valid scenario', () => {
+    expect(() => createSim({ scenario: VALID_SCENARIO, seed: 1 })).not.toThrow();
+    expect(() => deserializeSim({ scenario: VALID_SCENARIO, bytes: VALID_BYTES })).not.toThrow();
+  });
+});
+
 describe('warp invariance', () => {
   test('batches of 1, 10 and 1000 ticks reach the same hash', () => {
     const log = grazeLog();

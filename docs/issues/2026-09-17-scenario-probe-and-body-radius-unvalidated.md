@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P2
 filed: 2026-09-17
 filed-by: agent
@@ -18,3 +18,5 @@ next `hashSim`. Validate at load: dryMass > 0, propellantMass >= 0, thrust > 0,
 exhaustVelocity > 0, radius > 0, dt > 0, integer capacities.
 
 ## Resolution
+
+**Resolved 2026-09-17** in GRV-0010, commit cd5830e. validateScenario (src/sim/sim.ts) called from createSim and deserializeSim rejects dt<=0/non-finite, non-integer or non-positive capacity, non-integer or negative burnNodeCapacity, and probe dryMass<=0/propellantMass<0/thrust<=0/exhaustVelocity<=0, all with non-finite checks; createBodyTable (src/sim/ephemeris/bodies.ts) now rejects radius<=0 and non-finite mu/radius/a/e/argPeriapsis/meanAnomaly0. Golden hash unchanged (e18434ee2785b566).
