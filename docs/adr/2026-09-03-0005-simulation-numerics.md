@@ -35,6 +35,7 @@ flyby**, an order of magnitude inside the smallest uncertainty box.
 | Hash | FNV-1a-style twin-lane 32-bit word hash over raw double bits, `-0` collapsed to `+0`, NaN guarded in development builds. |
 | Randomness | sfc32 per named stream, seeded from splitmix32 of `seed ^ fnv(name)`, four words per stream in the state. |
 | Command log | Quantised integers only: heading in 1/65536 turn, delta-v in mm/s, times in ticks. |
+| | **SUPERSEDED 2026-09-17 → docs/adr/2026-09-17-0006-level-format-and-solvability-evidence.md:** 1/65536 turn is 27 000 km of miss over an eleven-day flight; heading is 1/2^32 turn. |
 | Startup self-check | A kernel golden vector (256 fixed inputs through the kernels and the Kepler solver) is hashed at startup and compared with a stored constant. |
 
 ## Consequences
