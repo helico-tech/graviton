@@ -1,0 +1,19 @@
+---
+status: resolved
+priority: P1
+filed: 2026-09-17
+filed-by: agent
+work: GRV-0005
+---
+# src/sim lint bans imports between the core's own subdirectories
+
+## Observation
+
+Found by GRV-0005: `no-restricted-imports` with `group: ['../*']` matches the specifier's
+text, so `src/sim/ephemeris/kepler.ts` could not import `../math/kernels.ts` although both
+sit inside the core. GRV-0003 and GRV-0004 never crossed a subdirectory, so GRV-0001's
+lint-gate test never saw it. Blocks every remaining EPIC-02 unit, hence P1.
+
+## Resolution
+
+**Resolved 2026-09-17** in GRV-0005, commit 4a97538. Depth-aware import patterns in eslint.config.js; lint-gate test covers inside and outside imports at depth 1 and 2.

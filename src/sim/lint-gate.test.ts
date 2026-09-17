@@ -43,3 +43,23 @@ test('deterministic operations and sibling imports stay allowed in the core', as
   ].join('\n');
   expect(await ruleIdsFor(code, `${root}src/sim/fixture.ts`)).toEqual([]);
 });
+
+test('subdirectories of the core import each other but still nothing outside it', async () => {
+  const inside = "import { y } from '../math/kernels.ts';\nexport const a = y;\n";
+  expect(await ruleIdsFor(inside, `${root}src/sim/ephemeris/fixture.ts`)).toEqual([]);
+  const deepInside = "import { y } from '../../math/kernels.ts';\nexport const a = y;\n";
+  expect(await ruleIdsFor(deepInside, `${root}src/sim/dynamics/burn/fixture.ts`)).toEqual([]);
+
+  const outside = "import { x } from '../../render/plot.ts';\nexport const a = x;\n";
+  expect(await ruleIdsFor(outside, `${root}src/sim/ephemeris/fixture.ts`)).toEqual([
+    'no-restricted-imports',
+  ]);
+  const deepOutside = "import { x } from '../../../render/plot.ts';\nexport const a = x;\n";
+  expect(await ruleIdsFor(deepOutside, `${root}src/sim/dynamics/burn/fixture.ts`)).toEqual([
+    'no-restricted-imports',
+  ]);
+  const pkg = "import fs from 'node:fs';\nexport const a = fs;\n";
+  expect(await ruleIdsFor(pkg, `${root}src/sim/ephemeris/fixture.ts`)).toEqual([
+    'no-restricted-imports',
+  ]);
+});
