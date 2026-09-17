@@ -43,6 +43,67 @@ function run(sim: Sim, log: Command[], ticks: number): void {
   advance({ sim, log, ticks });
 }
 
+describe('scenario validation', () => {
+  const VALID_SCENARIO = scenario();
+  const VALID_BYTES = serializeSim(createSim({ scenario: VALID_SCENARIO, seed: 1 }));
+
+  test.each([
+    ['dt', 0],
+    ['dt', -1],
+    ['dt', NaN],
+    ['dt', Infinity],
+    ['capacity', 0],
+    ['capacity', -1],
+    ['capacity', 1.5],
+    ['capacity', NaN],
+    ['burnNodeCapacity', -1],
+    ['burnNodeCapacity', 1.5],
+    ['burnNodeCapacity', NaN],
+  ])('createSim and deserializeSim throw when scenario.%s is %p', (field, value) => {
+    const invalid = scenario({ [field]: value });
+    expect(() => createSim({ scenario: invalid, seed: 1 })).toThrow();
+    expect(() => deserializeSim({ scenario: invalid, bytes: VALID_BYTES })).toThrow();
+  });
+
+  test.each([
+    ['dryMass', 0],
+    ['dryMass', -1],
+    ['dryMass', NaN],
+    ['propellantMass', -1],
+    ['propellantMass', NaN],
+    ['thrust', 0],
+    ['thrust', -1],
+    ['thrust', NaN],
+    ['exhaustVelocity', 0],
+    ['exhaustVelocity', -1],
+    ['exhaustVelocity', NaN],
+  ])('createSim and deserializeSim throw when probe.%s is %p', (field, value) => {
+    const invalid = scenario({ probe: { ...VALID_SCENARIO.probe, [field]: value } });
+    expect(() => createSim({ scenario: invalid, seed: 1 })).toThrow();
+    expect(() => deserializeSim({ scenario: invalid, bytes: VALID_BYTES })).toThrow();
+  });
+
+  // The two failure modes demonstrated in docs/issues/2026-09-17-scenario-
+  // probe-and-body-radius-unvalidated.md: thrust: 0 arms a burn that never
+  // ends, exhaustVelocity: 0 makes mdot infinite.
+  test('createSim throws on the demonstrated thrust: 0 and exhaustVelocity: 0 cases', () => {
+    expect(() =>
+      createSim({ scenario: scenario({ probe: { ...VALID_SCENARIO.probe, thrust: 0 } }), seed: 1 }),
+    ).toThrow();
+    expect(() =>
+      createSim({
+        scenario: scenario({ probe: { ...VALID_SCENARIO.probe, exhaustVelocity: 0 } }),
+        seed: 1,
+      }),
+    ).toThrow();
+  });
+
+  test('accepts a valid scenario', () => {
+    expect(() => createSim({ scenario: VALID_SCENARIO, seed: 1 })).not.toThrow();
+    expect(() => deserializeSim({ scenario: VALID_SCENARIO, bytes: VALID_BYTES })).not.toThrow();
+  });
+});
+
 describe('warp invariance', () => {
   test('batches of 1, 10 and 1000 ticks reach the same hash', () => {
     const log = grazeLog();
@@ -179,6 +240,51 @@ describe('substep determinism', () => {
       run(reloaded, log, 600 - splitAt);
       expect(hashSim(reloaded)).toBe(expected);
     }
+  });
+});
+
+describe('burn nodes for a probe that has hit a body', () => {
+  function launchOnlyLog(): Command[] {
+    return [{ tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }]; // radial, sub-escape: falls back and hits
+  }
+
+  // Finds the tick the radial-fall probe actually hits at, empirically, rather
+  // than assuming a value: the exact tick depends on the integrator, not a
+  // closed-form time of flight.
+  function findHitTick(): number {
+    const sim = createSim({ scenario: scenario(), seed: 1 });
+    for (let t = 0; t < 400; t++) {
+      run(sim, launchOnlyLog(), 1);
+      if (sim.objects.hitBody[0] !== -1) return sim.tick;
+    }
+    throw new Error('test setup: probe 0 never hit the body within 400 ticks');
+  }
+
+  test('a due node for a hit probe is dropped, not armed; nodes for other probes fire normally', () => {
+    const hitTick = findHitTick();
+    const dueTick = hitTick + 10;
+    const laterDueTick = dueTick + 20;
+    const log: Command[] = [
+      { tick: 0, kind: 'launch', body: 0, heading: 0, speed: 2_000_000 }, // probe 0: falls back and hits
+      { tick: 0, kind: 'launch', body: 0, heading: 32768, speed: 12_000_000 }, // probe 1: escapes, unaffected
+      { tick: 0, kind: 'burn', probe: 0, atTick: dueTick, prograde: 100_000, lateral: 0 },
+      { tick: 0, kind: 'burn', probe: 1, atTick: dueTick, prograde: 100_000, lateral: 0 },
+      { tick: 0, kind: 'burn', probe: 0, atTick: laterDueTick, prograde: 200_000, lateral: 0 },
+    ];
+
+    const sim = createSim({ scenario: scenario(), seed: 1 });
+    run(sim, log, hitTick);
+    expect(sim.objects.hitBody[0]).not.toBe(-1); // hit as predicted
+    expect(sim.pending.count).toBe(3); // none due yet
+
+    run(sim, log, dueTick - hitTick + 1); // carry past the first due tick
+    expect(sim.objects.burning[0]).toBe(0); // hit probe never arms
+    expect(sim.pending.count).toBe(1); // probe 0's node dropped, probe 1's fired; probe 0's later node still waits
+    expect(sim.objects.burnDelivered[1]).toBeGreaterThan(0); // probe 1's burn actually ran
+
+    run(sim, log, laterDueTick - dueTick); // carry past the later due tick too
+    expect(sim.objects.burning[0]).toBe(0); // still never arms
+    expect(sim.pending.count).toBe(0); // the later node was dropped too, in its turn
   });
 });
 

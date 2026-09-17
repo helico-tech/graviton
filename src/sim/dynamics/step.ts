@@ -102,6 +102,12 @@ function testCollisions({
       const radius = bodies.radius[b]!;
       if (dx * dx + dy * dy <= radius * radius) {
         objects.hitBody[i] = b;
+        // Every kick and drift after this skips a hit object (pefrl.ts), so
+        // a still-armed burn would freeze mid-burn instead of ending: clear
+        // it here, at the same substep endpoint, so `burning` stays
+        // consistent with `hitBody` for hashSim/serializeSim (state-driven,
+        // not derived).
+        objects.burning[i] = 0;
         break;
       }
     }

@@ -102,6 +102,11 @@ function applyBurn(sim: Sim, command: BurnCommand): void {
   requireRange(command.prograde, 'prograde', -0x7fffffff, 0x7fffffff);
   requireInt(command.lateral, 'lateral');
   requireRange(command.lateral, 'lateral', -0x7fffffff, 0x7fffffff);
+  // A zero delta-v target has no burn direction to freeze: startBurn (burn.ts)
+  // throws on it, but only once the node comes due, ticks after this command
+  // was applied. Reject it here instead, before it ever reaches the queue.
+  if (command.prograde === 0 && command.lateral === 0)
+    throw new Error('burn: prograde and lateral cannot both be zero');
 
   const pending = sim.pending;
   if (pending.count >= pending.object.length)

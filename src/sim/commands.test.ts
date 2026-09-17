@@ -130,6 +130,15 @@ describe('burn', () => {
     expect(() => applyCommand({ sim, command: burn({ lateral: 1.5 }) })).toThrow();
   });
 
+  // Zero prograde and zero lateral is a zero delta-v target: startBurn (burn.ts)
+  // rejects it, but that only runs once the node comes due, ticks after the
+  // command was logged. Reject it here instead, at apply time.
+  test('throws when both prograde and lateral are zero', () => {
+    const sim = makeSim();
+    applyCommand({ sim, command: launch() });
+    expect(() => applyCommand({ sim, command: burn({ prograde: 0, lateral: 0 }) })).toThrow();
+  });
+
   // A flight plan can carry several nodes per probe (GAME-0001 §4.4), so
   // the pending queue is sized on its own, not bounded by object capacity.
   test('accepts more pending nodes than objects, up to burnNodeCapacity, and throws beyond it', () => {
