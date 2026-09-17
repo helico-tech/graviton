@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=./schema/level.schema.json
+#
+# Compiler fixture (GRV-0016): a small but complete system -- a primary, a planet, a moon, one
+# rail, one probe type, one fixed contact -- exercising every unit dimension the compiler
+# understands (length, mass, duration including a compound one, speed, force, angle, energy).
+# Not a campaign level: compile.test.ts and the CLI's --check staleness test both load this
+# file's compiled JSON, and a test replays a few hundred ticks of it through the real simulation.
+schema: 1
+id: T00-compiler-fixture
+name: Compiler Fixture
+brief: A minimal system for exercising the level compiler end to end.
+debrief: If you can read this, the compiler ran.
+seed: 481516234
+streams: [debris_ejection]
+dt: 30 s
+
+bodies:
+  - id: kerwen
+    name: Kerwen
+    class: star
+    mass: 1.71e30 kg
+    radius: 600000 km
+    rotationPeriod: 25.5 d
+    axialPhaseAtEpoch: 0 deg
+
+  - id: sadal
+    name: Sadal
+    class: rock
+    mass: 4.9e24 kg
+    radius: 6100 km
+    rotationPeriod: 25h 33m
+    axialPhaseAtEpoch: 22.9 deg
+    orbit:
+      parent: kerwen
+      a: 0.92 au
+      e: 0.014
+      argPeriapsis: 17.8 deg
+      meanAnomalyAtEpoch: 0 deg
+
+  - id: tesh
+    name: Tesh
+    class: ice
+    mass: 8.9e19 kg
+    radius: 180 km
+    rotationPeriod: 1.77 d
+    axialPhaseAtEpoch: 34.4 deg
+    orbit:
+      parent: sadal
+      a: 400000 km
+      e: 0.004
+      argPeriapsis: 0 deg
+      meanAnomalyAtEpoch: 34.4 deg
+
+rails:
+  - id: sadal-north
+    name: Sadal North Rail
+    host: sadal
+    longitude: 12.5 deg
+    muzzleSpeed: { min: 60 km/s, max: 300 km/s }
+    headingCone: 69 deg
+    reloadTime: 6 h
+
+probes:
+  - id: sweeper
+    name: Sweeper
+    count: 3
+    dryMass: 420 kg
+    propellantMass: 680 kg
+    exhaustVelocity: 31 km/s
+    maxThrust: 9.4 kN
+    nodeBudget: 4
+
+contacts:
+  - kind: fixed
+    id: tender-hulk
+    name: Survey Tender (hulk)
+    host: tesh
+    longitude: 88.0 deg
+    captureRadius: 40 km
+    clearedBy:
+      minimumImpactEnergy: 2.4 TJ

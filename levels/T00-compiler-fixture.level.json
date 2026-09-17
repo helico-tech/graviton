@@ -1,0 +1,100 @@
+{
+  "bodyClasses": [
+    "star",
+    "rock",
+    "ice"
+  ],
+  "bodyIds": [
+    "kerwen",
+    "sadal",
+    "tesh"
+  ],
+  "brief": "A minimal system for exercising the level compiler end to end.",
+  "contactIds": [
+    "tender-hulk"
+  ],
+  "debrief": "If you can read this, the compiler ran.",
+  "id": "T00-compiler-fixture",
+  "name": "Compiler Fixture",
+  "names": {
+    "bodies": [
+      "Kerwen",
+      "Sadal",
+      "Tesh"
+    ],
+    "contacts": [
+      "Survey Tender (hulk)"
+    ],
+    "rails": [
+      "Sadal North Rail"
+    ]
+  },
+  "railIds": [
+    "sadal-north"
+  ],
+  "scenario": {
+    "bodies": [
+      {
+        "axialPhaseAtEpoch": 0,
+        "mu": 114130530000000000000,
+        "parent": -1,
+        "radius": 600000000,
+        "rotationPeriod": 2203200
+      },
+      {
+        "a": 137630041044,
+        "argPeriapsis": 0.31066860685499065,
+        "axialPhaseAtEpoch": 0.39968039870670147,
+        "e": 0.014,
+        "meanAnomaly0": 0,
+        "mu": 327040700000000,
+        "parent": 0,
+        "radius": 6100000,
+        "rotationPeriod": 91980
+      },
+      {
+        "a": 400000000,
+        "argPeriapsis": 0,
+        "axialPhaseAtEpoch": 0.6003932626860493,
+        "e": 0.004,
+        "meanAnomaly0": 0.6003932626860493,
+        "mu": 5940126999.999999,
+        "parent": 1,
+        "radius": 180000,
+        "rotationPeriod": 152928
+      }
+    ],
+    "burnNodeCapacity": 12,
+    "capacity": 3,
+    "contacts": [
+      {
+        "captureRadius": 40000,
+        "host": 2,
+        "longitude": 1.53588974175501,
+        "minimumImpactEnergy": 2400000000000
+      }
+    ],
+    "dt": 30,
+    "probe": {
+      "dryMass": 420,
+      "exhaustVelocity": 31000,
+      "propellantMass": 680,
+      "thrust": 9400
+    },
+    "rails": [
+      {
+        "headingCone": 1.2042771838760873,
+        "host": 1,
+        "longitude": 0.2181661564992912,
+        "muzzleSpeedMax": 300000,
+        "muzzleSpeedMin": 60000,
+        "reloadTicks": 720
+      }
+    ],
+    "streams": [
+      "debris_ejection"
+    ]
+  },
+  "schema": 1,
+  "seed": 481516234
+}

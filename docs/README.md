@@ -38,6 +38,10 @@ are the deterministic tools the working agreements require; run them with
 plain `node` (Node 24 strips types). Work item IDs are `GRV-NNNN`; epics are
 `EPIC-NN`.
 
+`pnpm levels:build [--check]` compiles every `levels/*.level.yaml` to canonical JSON beside it
+and regenerates `levels/schema/level.schema.json` (ADR-0006, docs/work/GRV-0016-level-compiler.md);
+`--check` writes nothing and fails on stale output or a level with issues, and is part of `pnpm check`.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;
