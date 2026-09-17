@@ -87,6 +87,10 @@ export interface SubstepLevelArgs {
   exhaustVelocity?: number;
   burnTarget?: number;
   burnDelivered?: number;
+  /** Mass left when the tank is empty, kg (research §3.6). Bounds the burn
+   *  term by the propellant actually left, not just the delta-v target --
+   *  docs/issues/2026-09-17-burn-ladder-term-ignores-tank-exhaustion.md. */
+  dryMass?: number;
 }
 
 /** The substep level for one object: the max over bodies of the dynamical
@@ -107,6 +111,7 @@ export function substepLevel({
   exhaustVelocity = 0,
   burnTarget = 0,
   burnDelivered = 0,
+  dryMass = 0,
 }: SubstepLevelArgs): number {
   let L = 0;
   for (let b = 0; b < bodies.count; b++) {
@@ -131,7 +136,9 @@ export function substepLevel({
   if (burning) {
     const mdot = thrust / exhaustVelocity;
     const rem = burnTarget - burnDelivered;
-    const tBurnRemaining = (mass / mdot) * (1 - dexp(-rem / exhaustVelocity));
+    const tauTarget = (mass / mdot) * (1 - dexp(-rem / exhaustVelocity));
+    const tauDry = (mass - dryMass) / mdot;
+    const tBurnRemaining = tauTarget < tauDry ? tauTarget : tauDry;
     const lBurn = burnLevel(dt, tBurnRemaining);
     if (lBurn > L) L = lBurn;
   }
