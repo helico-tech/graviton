@@ -47,7 +47,15 @@ function simImports(levelsUp) {
 }
 
 export default defineConfig([
-  globalIgnores(['docs/', 'dist/', 'node_modules/', 'runs/', '.playwright-cli/', 'test-results/']),
+  globalIgnores([
+    '.worktrees/',
+    'docs/',
+    'dist/',
+    'node_modules/',
+    'runs/',
+    '.playwright-cli/',
+    'test-results/',
+  ]),
   js.configs.recommended,
   tseslint.configs.recommended,
   {
