@@ -18,4 +18,4 @@ rendered are later epics.
 Reference implementations from the numerics research are ported, not
 re-derived: `docs/research/2026-09-03-02-simulation-numerics.md` §11.
 
-Stories: GRV-0003, GRV-0004, GRV-0005, GRV-0006, GRV-0007.
+Stories: GRV-0003, GRV-0004, GRV-0005, GRV-0006, GRV-0007, GRV-0008.

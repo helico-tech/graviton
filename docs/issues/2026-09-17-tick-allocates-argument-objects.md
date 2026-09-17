@@ -1,8 +1,9 @@
 ---
-status: open
+status: triaged
 priority: P3
 filed: 2026-09-17
 filed-by: agent
+work: GRV-0008
 ---
 # stepTick allocates an argument object per object per tick
 
