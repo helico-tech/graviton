@@ -1,7 +1,7 @@
 ---
 id: GRV-0024
 epic: EPIC-05
-status: todo
+status: done
 ---
 # GRV-0024 EPIC-05 review fixes
 
@@ -28,3 +28,13 @@ player runs is under test.
   `parity.spec.ts`.
 
 **Verification.** `pnpm check`, `pnpm e2e`, `pnpm screenshot --debug`.
+
+**Delivered.** `src/app/loop.ts`'s `warpEaseFrame` (value + `finished`, exact at and past the
+duration) replaces the two-branch stop-writing-early logic in `main.ts`'s rAF callback; reproduced
+first as a failing test against a faithful extraction of the old branch (`src/app/loop.test.ts`).
+`tests/e2e/loop.spec.ts` drives the real, non-debug loop with keyboard input and real waits, both
+browsers. The build tag moved to the status bar's right edge (`data-readout="status.build"`,
+`src/ui/status.ts`); `src/ui/timeline.ts` keeps only its own content -- re-shot and read at
+GRV-0023's hero-frame URL, no collision. ADR-0004 §1's `loadRun` line marked superseded;
+`parity.spec.ts`'s duplicate no-debug assertion removed. Evidence in
+`docs/evidence/GRV-0024/README.md`; the five issues resolved via `scripts/issues.ts`.

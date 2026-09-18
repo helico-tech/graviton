@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P3
 filed: 2026-09-18
 filed-by: agent
@@ -14,3 +14,5 @@ under the `GRAVITON build …` tag at the strip's right end. Move the build tag 
 bar's right edge, or reserve the strip's right margin for it.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0024, commit 20d8dd9. Moved the build tag into the status bar's right edge (data-readout="status.build", src/ui/status.ts); src/ui/timeline.ts's strip keeps only its own content. Confirmed with a re-shot of GRV-0023's hero-frame screenshot (docs/evidence/GRV-0024/hero-screenshot.png).

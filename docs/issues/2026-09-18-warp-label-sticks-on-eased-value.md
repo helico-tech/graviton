@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -17,3 +17,5 @@ froze). One readout the player reads that no longer originates in the simulation
 Fix: write the exact target when the ease ends.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0024, commit 20d8dd9. src/app/loop.ts's warpEaseFrame writes the exact target once the ease's elapsed time reaches the duration, whatever a frame overshoots it by; main.ts writes every animated frame unconditionally instead of stopping early on the assumption the last write was already exact. Reproduced first as a failing unit test against a faithful extraction of the old per-frame branch (src/app/loop.test.ts).
