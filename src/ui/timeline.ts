@@ -14,6 +14,11 @@ export interface TimelineMark {
   readonly key: string;
   readonly tick: number;
   readonly label: string;
+  /** Set only on the unified `event.<n>` marks (GRV-0027): `true` for a real, already-landed event
+   *  (drawn full via `.timeline-mark--past`), `false` for a predicted upcoming one (the plain,
+   *  already-dim default). `undefined` on every pre-existing mark (launch/impact/ghost.*), which
+   *  keeps its own unmarked look. */
+  readonly past?: boolean;
 }
 
 export function createTimelineStrip(): TimelineRefs {
@@ -81,7 +86,7 @@ export function renderTimeline(
       markElement({
         tick: mark.tick,
         rangeTicks,
-        className: 'timeline-mark',
+        className: mark.past ? 'timeline-mark timeline-mark--past' : 'timeline-mark',
         readoutKey: `timeline.${mark.key}`,
         label: mark.label,
       }),

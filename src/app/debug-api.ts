@@ -15,11 +15,14 @@ import type { Command, Scenario, Sim } from '../sim/sim.ts';
 import { SIM_VERSION } from '../sim/version.ts';
 import { readAllReadouts } from '../ui/readouts.ts';
 import { evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
+import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
+import { contactPoint } from '../sim/contacts.ts';
 import { captureFrame as captureFrameOf } from '../render/frame.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
 import type { View } from '../render/camera.ts';
 import { describeSelection as describeSelectionOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
+import type { EventContactState, EventObjectState, SimEvent } from './events.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import type { SolutionReadout } from '../planner/readout.ts';
 
@@ -58,6 +61,20 @@ export interface StateSnapshot {
   bodies: BodySnapshot[];
   objects: ObjectSnapshot[];
   contacts: ContactSnapshot[];
+}
+
+/** Every live object's/contact's event-relevant state at one tick (GRV-0027, events.ts), plus
+ *  every contact's world position at that same tick -- `stepSampled`'s own per-tick loop already
+ *  evaluates the ephemeris for `positions` and trails; this extends that same sampling point
+ *  rather than adding a second loop, so app.ts can feed both `diffEvents` (from `objects`/
+ *  `contacts`) and `sampleClosestApproach` (from `positions` paired with `contactPositions`)
+ *  without stepping the sim twice. */
+export interface TickEventSample {
+  tick: number;
+  objects: EventObjectState[];
+  contacts: EventContactState[];
+  /** Parallel to `contacts` -- `[]` when the level has none, never computed otherwise. */
+  contactPositions: { x: number; y: number }[];
 }
 
 export interface LoadArgs {
@@ -102,7 +119,7 @@ export interface DebugSession {
    *  `StateSnapshot` copy per tick would). */
   stepSampled(
     ticks: number,
-    onTick: (positions: readonly { x: number; y: number }[]) => void,
+    onTick: (positions: readonly { x: number; y: number }[], sample: TickEventSample) => void,
   ): StateSnapshot;
   hash(): string;
   state(): StateSnapshot;
@@ -120,17 +137,34 @@ export interface DebugSession {
   run(args: RunArgs): RunResult;
 }
 
+function makeEph(count: number): EphemerisOut {
+  return {
+    x: new Float64Array(count),
+    y: new Float64Array(count),
+    vx: new Float64Array(count),
+    vy: new Float64Array(count),
+  };
+}
+
+/** Every contact's world position at `sim`'s current tick (contactPoint), reused by both
+ *  `snapshot`'s frame-agnostic bodies and `stepSampled`'s per-tick event sample. */
+function contactPositions(sim: Sim, eph: EphemerisOut): { x: number; y: number }[] {
+  if (sim.contacts.count === 0) return [];
+  const t = sim.tick * sim.scenario.dt;
+  evaluateEphemeris(sim.bodies, t, eph);
+  const points: { x: number; y: number }[] = new Array(sim.contacts.count);
+  for (let c = 0; c < sim.contacts.count; c++) {
+    points[c] = contactPoint({ bodies: sim.bodies, contacts: sim.contacts, contact: c, t, eph });
+  }
+  return points;
+}
+
 /** Plain-number copy of the live object and contact-state arrays: primitives,
  *  not references, so the result can't alias `sim.objects`/`sim.contactState`
  *  and a fresh array is built on every call (research §4: `state()` is
  *  read-only). */
 function snapshot(sim: Sim): StateSnapshot {
-  const eph = {
-    x: new Float64Array(sim.bodies.count),
-    y: new Float64Array(sim.bodies.count),
-    vx: new Float64Array(sim.bodies.count),
-    vy: new Float64Array(sim.bodies.count),
-  };
+  const eph = makeEph(sim.bodies.count);
   evaluateEphemeris(sim.bodies, sim.tick * sim.scenario.dt, eph);
   const bodies: BodySnapshot[] = [];
   for (let i = 0; i < sim.bodies.count; i++) bodies.push({ x: eph.x[i]!, y: eph.y[i]! });
@@ -201,12 +235,31 @@ export function createDebugSession(): DebugSession {
 
     stepSampled(ticks, onTick) {
       const s = loaded();
+      const eph = makeEph(s.bodies.count);
       for (let i = 0; i < ticks; i++) {
         advance({ sim: s, log, ticks: 1 });
         const o = s.objects;
         const positions: { x: number; y: number }[] = new Array(o.count);
-        for (let j = 0; j < o.count; j++) positions[j] = { x: o.x[j]!, y: o.y[j]! };
-        onTick(positions);
+        const objects: EventObjectState[] = new Array(o.count);
+        for (let j = 0; j < o.count; j++) {
+          positions[j] = { x: o.x[j]!, y: o.y[j]! };
+          objects[j] = {
+            burning: o.burning[j]! !== 0,
+            hitContact: o.hitContact[j]!,
+            hitBody: o.hitBody[j]!,
+          };
+        }
+        const cs = s.contactState;
+        const contacts: EventContactState[] = new Array(s.contacts.count);
+        for (let c = 0; c < s.contacts.count; c++) {
+          contacts[c] = { cleared: cs.cleared[c]! !== 0, impactTick: cs.impactTick[c]! };
+        }
+        onTick(positions, {
+          tick: s.tick,
+          objects,
+          contacts,
+          contactPositions: contactPositions(s, eph),
+        });
       }
       return snapshot(s);
     },
@@ -254,9 +307,21 @@ export interface DebugApiDriver {
   hash(): string;
   state(): StateSnapshot;
   run(args: RunArgs): RunResult;
+  /** Every event landed so far this session (GRV-0027, src/app/events.ts's own `SimEvent`). */
+  events(): readonly SimEvent[];
+  /** The earliest known future event tick, or `null` (GRV-0027 App interface doc). */
+  nextEventTick(): number | null;
+  /** Arms `App.warpToEvent` and, unlike it, drains the warp to completion in one synchronous call
+   *  (design note: "advances to the target in one call -- that is fine there") by looping `App`'s
+   *  own per-frame `step` -- debug mode has no rAF loop to spread the work across frames the way
+   *  the real page does. A no-op if there is no known upcoming event. */
+  warpToEvent(): void;
   /** One synchronous frame of the plot at the current state (GRV-0022, ADR-0004 §1): draws, does
    *  not advance anything. Implemented in main.ts by composing the DOM-free `App` above with
-   *  src/ui/plot.ts's canvas-owning controller -- `App` itself stays DOM-free. */
+   *  src/ui/plot.ts's canvas-owning controller -- `App` itself stays DOM-free. Also applies the
+   *  automatic-drop invert toggle (GRV-0027): the first `render()` after an event lands shows it,
+   *  the next one clears it (design note "in debug mode render() applies and the next render()
+   *  clears it"). */
   render(): void;
   /** FNV-1a over the plot canvas's RGBA bytes (src/sim/state/hash.ts), comparable only under one
    *  renderer key (research §3: Playwright's Chromium and `@napi-rs/canvas` draw 7% of pixels
@@ -306,6 +371,12 @@ export interface DebugApi {
    *  reads the live DOM, not app-internal state, so a broken panel fails this even when the
    *  simulation underneath is correct. */
   readouts(): Record<string, string>;
+  // -- Events and time control (GRV-0027, GAME-0001 §4.11).
+  events(): readonly SimEvent[];
+  nextEventTick(): number | null;
+  /** Synchronous: advances to the next known event tick in one call and drops to 1x (design
+   *  note) -- a no-op if there is no known upcoming event. */
+  warpToEvent(): void;
   render(): void;
   frameHash(): string;
   /** A copy of the plot's current camera state -- mutating it does nothing (GRV-0022 acceptance
@@ -361,6 +432,9 @@ export function installDebugApi(driver: DebugApiDriver): void {
     state: () => driver.state(),
     run: (args) => driver.run(args),
     readouts: () => readAllReadouts(document),
+    events: () => driver.events(),
+    nextEventTick: () => driver.nextEventTick(),
+    warpToEvent: () => driver.warpToEvent(),
     render: () => driver.render(),
     frameHash: () => driver.frameHash(),
     view: () => driver.view(),

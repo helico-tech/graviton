@@ -12,6 +12,7 @@ export interface StatusRefs {
   warpEffective: HTMLElement;
   post: HTMLElement;
   delay: HTMLElement;
+  event: HTMLElement;
   build: HTMLElement;
 }
 
@@ -21,6 +22,9 @@ export interface StatusValues {
   warpEffective: string;
   post: string;
   delay: string;
+  /** The last landed event's terse text (GRV-0027), shown alongside the automatic drop's single
+   *  inverted frame (GAME-0002 §9) -- main.ts toggles `.status-bar--invert` on `element` itself. */
+  event: string;
 }
 
 function field(label: string, readout: string): { wrap: HTMLElement; value: HTMLElement } {
@@ -45,13 +49,22 @@ export function createStatusBar({ buildSha }: { buildSha: string }): StatusRefs 
   const warpEffective = field('WARP EFF', 'status.warp.effective');
   const post = field('POST', 'status.post');
   const delay = field('DELAY', 'status.delay');
+  const event = field('EVENT', 'status.event');
 
   const build = document.createElement('span');
   build.className = 'build-tag';
   build.dataset.readout = 'status.build';
   build.textContent = `GRAVITON build ${buildSha}`;
 
-  element.append(time.wrap, warp.wrap, warpEffective.wrap, post.wrap, delay.wrap, build);
+  element.append(
+    time.wrap,
+    warp.wrap,
+    warpEffective.wrap,
+    post.wrap,
+    delay.wrap,
+    event.wrap,
+    build,
+  );
 
   return {
     element,
@@ -60,6 +73,7 @@ export function createStatusBar({ buildSha }: { buildSha: string }): StatusRefs 
     warpEffective: warpEffective.value,
     post: post.value,
     delay: delay.value,
+    event: event.value,
     build,
   };
 }
@@ -70,4 +84,5 @@ export function renderStatus(refs: StatusRefs, values: StatusValues): void {
   refs.warpEffective.textContent = values.warpEffective;
   refs.post.textContent = values.post;
   refs.delay.textContent = values.delay;
+  refs.event.textContent = values.event;
 }

@@ -2,9 +2,25 @@
 // GRV-0011): command ordering, state() copy semantics, and run()'s
 // independence from the loaded session. installDebugApi's window wiring
 // needs a real page and is covered by tests/e2e/parity.spec.ts instead.
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { createDebugSession } from './debug-api.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
+import { repoRoot } from '../../scripts/lib/repo.ts';
+
+interface GoldenFile {
+  scenario: Scenario;
+  seed: number;
+  log: Command[];
+  ticks: number;
+}
+
+function loadGolden(name: string): GoldenFile {
+  return JSON.parse(
+    fs.readFileSync(path.join(repoRoot, 'tests', 'golden', name), 'utf8'),
+  ) as GoldenFile;
+}
 
 const DT = 60;
 const MU = 3.986004418e14; // Earth-like
@@ -158,6 +174,57 @@ describe('createDebugSession', () => {
     for (const sample of samples) expect(sample).toHaveLength(1); // the one launched probe
     // The probe actually moves: not every sampled tick has the same position.
     expect(new Set(samples.map((s) => s[0]!.x)).size).toBeGreaterThan(1);
+  });
+
+  test('stepSampled’s event sample reports every live object’s flags and every contact’s state, with no contacts an empty pair of arrays', () => {
+    const session = createDebugSession();
+    session.load({ scenario: scenario(), seed: 1 });
+    session.command(launchCommand());
+
+    const ticks: { tick: number; objects: number; contacts: number }[] = [];
+    session.stepSampled(3, (_positions, sample) => {
+      ticks.push({
+        tick: sample.tick,
+        objects: sample.objects.length,
+        contacts: sample.contacts.length,
+      });
+      expect(sample.contactPositions).toEqual([]);
+    });
+
+    expect(ticks).toEqual([
+      { tick: 1, objects: 1, contacts: 0 },
+      { tick: 2, objects: 1, contacts: 0 },
+      { tick: 3, objects: 1, contacts: 0 },
+    ]);
+  });
+
+  test('stepSampled’s event sample tracks a burn node’s start/end via burning, and reports an impact via hitContact/cleared/impactTick, on the real intercept golden', () => {
+    const golden = loadGolden('intercept.json');
+    const session = createDebugSession();
+    session.load({ scenario: golden.scenario, seed: golden.seed });
+    for (const command of golden.log) session.command(command);
+
+    let sawImpact = false;
+    session.stepSampled(golden.ticks, (_positions, sample) => {
+      const object = sample.objects[0];
+      if (!object) return;
+      expect(object.burning).toBe(false); // the golden's log has no burn node, only a launch
+      // hitContact latches once set (an expended object never moves again), so only the first
+      // sample where it appears is "the" impact tick -- every later sample would repeat it.
+      if (object.hitContact !== -1 && !sawImpact) {
+        sawImpact = true;
+        expect(sample.contacts[object.hitContact]!.cleared).toBe(true);
+        // stepTick records impactTick at the pre-increment tick (sim.ts's advance: step, then
+        // increment); sample.tick is read post-increment, matching trails.ts's own convention.
+        expect(sample.contacts[object.hitContact]!.impactTick).toBe(sample.tick - 1);
+        expect(sample.contactPositions).toHaveLength(1);
+      }
+    });
+
+    expect(sawImpact).toBe(true);
+    const finalState = session.state();
+    expect(finalState.objects[0]!.hitContact).toBe(0);
+    expect(finalState.contacts[0]!.cleared).toBe(1);
   });
 
   test('captureFrame throws before a scenario is loaded, like state()/hash()', () => {

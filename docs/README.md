@@ -62,6 +62,12 @@ The planner overlay (EPIC-06) adds `plan()`/`setPlan(plan)`/`commitPlan()`/`setH
 `solution()` to `window.graviton` (GRV-0026): `solution()` is the *draft's own ghost* readout
 (`src/planner/readout.ts`), distinct from `App.solution()`'s committed campaign log above.
 
+Events and time control (GRV-0027, GAME-0001 §4.11): the page never warps past a decision. An
+event of interest (launch, node start/end, impact, body hit, a contact clearing, closest approach)
+automatically drops the rung to 1x and inverts the status bar for exactly one rendered frame; key
+`.` (debug `warpToEvent()`) jumps straight to the next known one. `events()`/`nextEventTick()`
+round out the debug API.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;

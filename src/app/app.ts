@@ -7,9 +7,12 @@
 // `advance` does -- it only reads what the session already computed).
 import { createDebugSession } from './debug-api.ts';
 import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts';
+import { diffEvents, sampleClosestApproach } from './events.ts';
+import type { EventSnapshot, RangeTrend, SimEvent } from './events.ts';
 import { getLevel, levelIds } from './levels.ts';
 import type { CompiledLevel } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
+import { predictProbe } from './predict.ts';
 import {
   GHOST_HORIZON_TICKS,
   addNode as plannerAddNode,
@@ -34,7 +37,13 @@ import type { CompiledSolution } from './solutions.ts';
 import { formatSimTime } from './time.ts';
 import { createTrailSet, resetTrailSet, sampleTrailSet, trailPoints } from './trails.ts';
 import type { TrailSet } from './trails.ts';
-import { clampRung, stepRung, ticksPerFrame, togglePause as togglePauseRung } from './warp.ts';
+import {
+  WARP_LADDER,
+  clampRung,
+  stepRung,
+  ticksPerFrame,
+  togglePause as togglePauseRung,
+} from './warp.ts';
 import type { WarpRung } from './warp.ts';
 import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
@@ -59,6 +68,9 @@ export interface StatusValues {
   warpEffective: string;
   post: string;
   delay: string;
+  /** The last landed event's terse text (GAME-0002 §9's inverted-frame announcement, GRV-0027) --
+   *  `'—'` before anything has happened. */
+  event: string;
 }
 
 export interface PlotError {
@@ -75,6 +87,10 @@ export interface TimelineMark {
   readonly key: string;
   readonly tick: number;
   readonly label: string;
+  /** Set only on the unified `event.<n>` marks (GRV-0027): `true` for a real, already-landed event
+   *  from `events()` (drawn full), `false` for a predicted upcoming one (drawn dim). `undefined` on
+   *  every pre-existing mark (launch/impact/ghost.*), which keeps its own unmarked look. */
+  readonly past?: boolean;
 }
 
 export interface TimelineData {
@@ -106,6 +122,28 @@ export interface App {
   hash(): string;
   state(): StateSnapshot;
   run(args: RunArgs): RunResult;
+  /** Every event landed so far this session (GRV-0027, src/app/events.ts), oldest first -- a copy,
+   *  like `view()`'s own contract. */
+  events(): readonly SimEvent[];
+  /** The earliest known future event tick (GRV-0027 design note), the minimum over: committed log
+   *  commands with tick > now, the draft ghost's own events, and a prediction of each running
+   *  probe's remaining flight (src/app/predict.ts) -- `null` when nothing is known to be coming. */
+  nextEventTick(): number | null;
+  /** Arms `warpToEvent`: jumps the rung to the top of the ladder and records `nextEventTick()` as
+   *  the target `step` clamps to -- a no-op if there is no known upcoming event. Does *not* itself
+   *  drain the warp; the real rAF loop's own per-frame `step` calls drain it a budget at a time
+   *  (never a single giant advance that freezes the page), and the debug API's own `warpToEvent`
+   *  wraps this with a synchronous drain loop (main.ts). */
+  warpToEvent(): void;
+  /** The tick `warpToEvent` last armed, `null` once reached (or if never armed) -- lets a caller
+   *  drive a synchronous drain loop without reaching into app internals. */
+  warpTargetTick(): number | null;
+  /** True exactly once per landed automatic drop (GAME-0002 §9's single inverted status-bar frame):
+   *  the first call after `step`/`warpToEvent` drops the rung returns `true` and clears the flag,
+   *  every call after that (until the next drop) returns `false` -- main.ts calls this once per
+   *  rendered frame (the real rAF loop, and the debug API's own `render()`) to toggle the class for
+   *  exactly one frame. */
+  takePendingInvert(): boolean;
   /** A read-only render snapshot of the loaded session at its current tick (src/render/frame.ts);
    *  throws if nothing is loaded, like `state()`/`hash()`. */
   frame(): Frame;
@@ -209,7 +247,18 @@ const NO_STATE: StatusValues = {
   warpEffective: DASH,
   post: DASH,
   delay: DASH,
+  event: DASH,
 };
+
+/** `snap`'s own contact state, matching events.ts's `EventContactState`, before anything has been
+ *  sampled for it yet -- `diffEvents`'s own `before` for the tick a level was just loaded at. */
+function initialEventSnapshot(snap: StateSnapshot): EventSnapshot {
+  return {
+    tick: snap.tick,
+    objects: [],
+    contacts: snap.contacts.map((c) => ({ cleared: c.cleared !== 0, impactTick: c.impactTick })),
+  };
+}
 
 export function createApp({ onChange }: { onChange: (change: AppChange) => void }): App {
   const session = createDebugSession();
@@ -229,14 +278,84 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   let currentLevel: CompiledLevel | null = null;
   let plannerState: PlannerState = createPlannerState();
 
+  // Events (GRV-0027): the session's own append-only log, the per-tick diff cursor, each
+  // (probe, contact) pair's closest-approach trend, the pending-invert flag `step` arms and
+  // `takePendingInvert` consumes, and the warp-to-event target `step` clamps to.
+  let eventLog: SimEvent[] = [];
+  let lastEventSnapshot: EventSnapshot | null = null;
+  const rangeTrends = new Map<string, RangeTrend>();
+  let pendingInvert = false;
+  let warpTarget: number | null = null;
+  // Keyed by probe index; invalidated by log length rather than reference (debug-api.ts's log is
+  // mutated in place by `command`, so `session.log()` never changes reference within a session).
+  const predictionCache = new Map<number, { atLogLength: number; events: SimEvent[] }>();
+
+  function resetEvents(snap: StateSnapshot | undefined): void {
+    eventLog = [];
+    lastEventSnapshot = snap ? initialEventSnapshot(snap) : null;
+    rangeTrends.clear();
+    pendingInvert = false;
+    warpTarget = null;
+    predictionCache.clear();
+  }
+
+  function probeTag(index: number): string {
+    return selectionNameOf({ level: levelNames, selection: { kind: 'probe', index } });
+  }
+
+  /** The terse, uppercase text GAME-0002 §9's inverted status-bar frame and the timeline strip's
+   *  event marks both show (design note: "IMPACT PRB-01 -> DRIFT-HULK style"). Contact/body names
+   *  read their own compiled id (not the display name, which may contain spaces) uppercased --
+   *  the same terse convention `selectionNameOf` already uses for `PRB-NN`. */
+  function eventText(event: SimEvent): string {
+    const probe = event.probe !== undefined ? probeTag(event.probe) : '';
+    const contact =
+      event.contact !== undefined
+        ? (levelNames.contactIds[event.contact] ?? `CONTACT-${event.contact}`).toUpperCase()
+        : '';
+    const body =
+      event.body !== undefined
+        ? (levelNames.bodyIds[event.body] ?? `BODY-${event.body}`).toUpperCase()
+        : '';
+    switch (event.kind) {
+      case 'launch':
+        return `LAUNCH ${probe}`;
+      case 'nodeStart':
+        return `BURN START ${probe}`;
+      case 'nodeEnd':
+        return `BURN END ${probe}`;
+      case 'impact':
+        return `IMPACT ${probe} → ${contact}`;
+      case 'bodyHit':
+        return `IMPACT ${probe} → ${body}`;
+      case 'cleared':
+        return `CLEARED ${contact}`;
+      case 'closestApproach':
+        return `CLOSEST APPROACH ${probe} → ${contact}`;
+    }
+  }
+
+  /** The event the status bar announces (GRV-0027): usually the last one landed, except an impact
+   *  that clears its contact pushes *two* events the same tick (impact, then cleared -- causal
+   *  order: the impact is what caused the clearing) -- `cleared` alone is strictly less
+   *  informative than the impact right before it, so the impact is what's shown. */
+  function lastEventForStatus(): SimEvent | undefined {
+    const last = eventLog.at(-1);
+    if (!last || last.kind !== 'cleared') return last;
+    const prior = eventLog.at(-2);
+    return prior && prior.tick === last.tick && prior.kind === 'impact' ? prior : last;
+  }
+
   function statusValues(): StatusValues {
     if (!ready || currentDt === null) return NO_STATE;
+    const lastEvent = lastEventForStatus();
     return {
       time: formatSimTime({ tick: session.state().tick, dt: currentDt }),
       warp: `${ticksPerFrame(rung)}x`,
       warpEffective: `${effectiveTicksThisFrame(rung)}x`,
       post: postName,
       delay: DASH,
+      event: lastEvent ? eventText(lastEvent) : DASH,
     };
   }
 
@@ -263,6 +382,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       currentSolution = null;
       plannerState = createPlannerState();
       resetTrailSet(trailSet);
+      resetEvents(undefined);
       emit({ id, knownIds: levelIds() }, true);
       return undefined;
     }
@@ -279,6 +399,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
+    resetEvents(snap);
     ready = true;
     emit(null, true);
     return snap;
@@ -297,6 +418,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
+    resetEvents(snap);
     ready = true;
     emit(null, true);
     return snap;
@@ -309,6 +431,68 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     for (const command of solution.log) session.command(command);
     currentSolution = solution;
     emit();
+  }
+
+  /** `probe`'s predicted remaining-flight events (src/app/predict.ts), cached until the committed
+   *  log grows (GRV-0027 design note: "cached per probe until the log changes") -- `session.log()`
+   *  is mutated in place by `command` (never reassigned), so length is the change signal, not
+   *  reference identity. */
+  function predictedEventsFor(probe: number): SimEvent[] {
+    if (!currentLevel) return [];
+    const log = session.log();
+    const cached = predictionCache.get(probe);
+    if (cached && cached.atLogLength === log.length) return cached.events;
+
+    const nowTick = session.state().tick;
+    const events = predictProbe({
+      level: currentLevel,
+      log,
+      probe,
+      fromTick: nowTick,
+      horizonTick: nowTick + GHOST_HORIZON_TICKS,
+    });
+    predictionCache.set(probe, { atLogLength: log.length, events });
+    return events;
+  }
+
+  /** Every known future event tick, labelled (GRV-0027 design note: "committed log commands with
+   *  tick > now ... and predictions for running probes"). The draft ghost's own events are *not*
+   *  folded in here -- they already have their own `ghost.*` timeline marks (GRV-0026) and
+   *  `nextEventTick` reads them directly, so this stays the two sources that have no other
+   *  representation yet: future committed commands and running-probe predictions. */
+  function upcomingEvents(): { tick: number; label: string }[] {
+    if (!currentLevel) return [];
+    const nowTick = session.state().tick;
+    const results: { tick: number; label: string }[] = [];
+
+    for (const command of session.log()) {
+      if (command.tick <= nowTick) continue;
+      results.push({ tick: command.tick, label: command.kind === 'launch' ? 'LAUNCH' : 'BURN' });
+    }
+
+    const snap = session.state();
+    for (let i = 0; i < snap.objects.length; i++) {
+      const obj = snap.objects[i]!;
+      if (obj.hitBody !== -1 || obj.hitContact !== -1) continue; // expended, no more events
+      for (const event of predictedEventsFor(i)) {
+        if (event.tick > nowTick) results.push({ tick: event.tick, label: eventText(event) });
+      }
+    }
+
+    return results;
+  }
+
+  function nextEventTick(): number | null {
+    if (!currentLevel) return null;
+    const nowTick = session.state().tick;
+    let best: number | null = null;
+    for (const { tick } of upcomingEvents()) if (best === null || tick < best) best = tick;
+    if (plannerState.ghost) {
+      for (const event of plannerState.ghost.events) {
+        if (event.tick > nowTick && (best === null || event.tick < best)) best = event.tick;
+      }
+    }
+    return best;
   }
 
   function timelineData(): TimelineData | null {
@@ -367,6 +551,18 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       rangeTicks = Math.max(rangeTicks, ghost.fromTick + ghost.samples.count);
     }
 
+    // The unified event list (GRV-0027 design note "labels keyed timeline.event.<n>"): landed
+    // events from the session's own log first (drawn full), then predicted upcoming ones
+    // continuing the same index (drawn dim) -- one continuous sequence, not two separate keyspaces.
+    eventLog.forEach((event, index) => {
+      marks.push({ key: `event.${index}`, tick: event.tick, label: eventText(event), past: true });
+      rangeTicks = Math.max(rangeTicks, event.tick);
+    });
+    upcomingEvents().forEach(({ tick, label }, index) => {
+      marks.push({ key: `event.${eventLog.length + index}`, tick, label, past: false });
+      rangeTicks = Math.max(rangeTicks, tick);
+    });
+
     return {
       marks,
       cursor: { tick: snap.tick, label: formatSimTime({ tick: snap.tick, dt }) },
@@ -374,16 +570,83 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     };
   }
 
+  /** Advances the loaded session by `ticks`, sampling trails and events once per tick (extending
+   *  trails.ts's own per-tick sampling point rather than adding a second loop) -- returns whether
+   *  any event landed, for `step`'s own automatic-drop decision. */
+  function advanceAndAccumulateEvents(ticks: number): boolean {
+    let landed = false;
+    session.stepSampled(ticks, (positions, sample) => {
+      sampleTrailSet(trailSet, positions);
+
+      const after: EventSnapshot = {
+        tick: sample.tick,
+        objects: sample.objects,
+        contacts: sample.contacts,
+      };
+      if (lastEventSnapshot) {
+        const edges = diffEvents({ before: lastEventSnapshot, after });
+        if (edges.length > 0) landed = true;
+        eventLog.push(...edges);
+      }
+      lastEventSnapshot = after;
+
+      for (let c = 0; c < sample.contacts.length; c++) {
+        if (sample.contacts[c]!.cleared) continue;
+        const contactPos = sample.contactPositions[c]!;
+        for (let i = 0; i < sample.objects.length; i++) {
+          const obj = sample.objects[i]!;
+          if (obj.hitContact !== -1 || obj.hitBody !== -1) continue;
+          const range = Math.hypot(positions[i]!.x - contactPos.x, positions[i]!.y - contactPos.y);
+          const key = `${i}:${c}`;
+          const { trend, event } = sampleClosestApproach({
+            prior: rangeTrends.get(key) ?? null,
+            tick: sample.tick,
+            probe: i,
+            contact: c,
+            range,
+          });
+          rangeTrends.set(key, trend);
+          if (event) {
+            eventLog.push(event);
+            landed = true;
+          }
+        }
+      }
+    });
+    return landed;
+  }
+
+  /** The one place the loop advances (GRV-0027 design note). Clamps to an armed `warpToEvent`
+   *  target so the caller's own per-frame budget is never exceeded even mid-warp (main.ts's real
+   *  rAF loop calls this once per frame; the debug API's synchronous `warpToEvent` just calls it in
+   *  a tight loop). Automatic drop: an event landing while the rung is above 1x drops it to 1x and
+   *  arms one inverted frame (GAME-0002 §9) -- gated on "was above 1x" so reaching an event already
+   *  at 1x (real-time play) doesn't flash. Reaching an armed target always drops to 1x, even on the
+   *  rare tick whose only committed command doesn't itself produce a matching SimEvent. */
   function step(ticks: number): StateSnapshot {
-    const snap = session.stepSampled(ticks, (positions) => sampleTrailSet(trailSet, positions));
+    const before = session.state().tick;
+    const effectiveTicks =
+      warpTarget === null ? ticks : Math.max(0, Math.min(ticks, warpTarget - before));
+
+    const landed = advanceAndAccumulateEvents(effectiveTicks);
+    if (landed && rung > 1) {
+      rung = 1;
+      pendingInvert = true;
+    }
+    if (warpTarget !== null && session.state().tick >= warpTarget) {
+      warpTarget = null;
+      rung = 1;
+    }
+
     emit();
-    return snap;
+    return session.state();
   }
 
   function warpTo(tick: number): StateSnapshot {
     const current = session.state().tick;
     if (tick < current)
       throw new Error(`app: warpTo(${tick}) precedes the current tick ${current}`);
+    warpTarget = null; // an explicit jump always overrides an in-flight warpToEvent
     return step(tick - current);
   }
 
@@ -391,6 +654,21 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     rung = clampRung(newRung);
     if (rung !== 0) lastNonZeroRung = rung;
     emit();
+  }
+
+  /** Arms the warp-to-event target and jumps to the top rung (GRV-0027 design note: "the loop
+   *  advances toward it at the top rung's budget per frame") -- a no-op without a known upcoming
+   *  event. Does not itself drain the warp; see the App interface doc.
+   *
+   *  `warpTarget` stores the sim *tick to stop at*, one past `nextEventTick()`'s own reported
+   *  tick: sim.ts's `advance` applies a command, or runs the step that lands an edge event, while
+   *  processing tick T, which only *completes* once `sim.tick` reaches T+1 -- stopping exactly at
+   *  T (not T+1) would land one tick short of the event actually having happened. */
+  function warpToEvent(): void {
+    const target = nextEventTick();
+    if (target === null) return;
+    warpTarget = target + 1;
+    setWarp(WARP_LADDER.length - 1);
   }
 
   /** Re-integrates the ghost from the current draft (src/app/planner.ts's own `reintegrate`) --
@@ -444,6 +722,15 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     hash: () => session.hash(),
     state: () => session.state(),
     run: (args) => session.run(args),
+    events: () => [...eventLog],
+    nextEventTick,
+    warpToEvent,
+    warpTargetTick: () => warpTarget,
+    takePendingInvert: () => {
+      if (!pendingInvert) return false;
+      pendingInvert = false;
+      return true;
+    },
     frame: () => {
       const t = plannerState.horizon === null ? undefined : plannerState.horizon * (currentDt ?? 0);
       return session.captureFrame(levelNames, t);
