@@ -1,9 +1,15 @@
 ---
 id: GRV-0021
 epic: EPIC-05
-status: todo
+status: done
 ---
 # GRV-0021 App shell, level loading and time control
+
+**Delivered.** The four-region shell (status bar, plot region, selection panel, timeline strip)
+loads a bundled compiled level under a fixed-step warp-laddered loop, every status number is
+`data-readout` text sourced from the simulation, the debug API drives level loading and warping to
+an absolute tick, and `tests/e2e/shell.spec.ts` proves it under the console gate. See
+`docs/evidence/GRV-0021/README.md` for command output, screenshots and deviations.
 
 **Goal.** The page is the instrument's frame: the four-region layout, the palette and type of
 GAME-0002 §2-3 and §8, a compiled level loaded and running under the warp ladder, and the status
