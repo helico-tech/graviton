@@ -36,3 +36,31 @@ export function easedWarpValue({
   const t = Math.min(Math.max(elapsedMs / durationMs, 0), 1);
   return from + (to - from) * t;
 }
+
+export interface WarpEaseFrame {
+  value: number;
+  finished: boolean;
+}
+
+// docs/issues/2026-09-18-warp-label-sticks-on-eased-value.md: a real rAF loop's frame spacing is
+// irregular, so no frame is guaranteed to land with `elapsedMs` anywhere near `durationMs` -- one
+// frame can sit just under it and the next jump straight past. The label previously stopped
+// updating once a frame crossed `durationMs`, trusting that the last write (at whatever fraction
+// the previous frame happened to land on) was already exact; it usually wasn't, so the label
+// stuck mid-ease. `warpEaseFrame` is the one thing a caller needs each frame: the value to show
+// and whether to keep animating -- once finished, `value` is always exactly `to`, regardless of
+// how far `elapsedMs` overshot `durationMs`.
+export function warpEaseFrame({
+  from,
+  to,
+  elapsedMs,
+  durationMs = WARP_EASE_MS,
+}: {
+  from: number;
+  to: number;
+  elapsedMs: number;
+  durationMs?: number;
+}): WarpEaseFrame {
+  if (elapsedMs >= durationMs) return { value: to, finished: true };
+  return { value: easedWarpValue({ from, to, elapsedMs, durationMs }), finished: false };
+}

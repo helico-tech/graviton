@@ -1,7 +1,10 @@
 // The status bar (GAME-0002 §8): the four numbers that "never move" -- simulated time, warp,
 // clearance post and one-way delay -- each tagged data-readout="status.<field>" (ADR-0004 §2).
 // Built once; renderStatus only ever overwrites text content, since panels never animate and
-// values change instantly (GAME-0002 §9).
+// values change instantly (GAME-0002 §9). The build tag (GRV-0024) sits at the bar's right edge,
+// pushed there by margin-left: auto -- it never collided with the panel fields, only with the
+// timeline's cursor label at the strip's own right end (docs/issues/2026-09-18-timeline-label-
+// collides-with-build-tag.md), so it moved here rather than the strip reserving a margin for it.
 export interface StatusRefs {
   element: HTMLElement;
   time: HTMLElement;
@@ -9,6 +12,7 @@ export interface StatusRefs {
   warpEffective: HTMLElement;
   post: HTMLElement;
   delay: HTMLElement;
+  build: HTMLElement;
 }
 
 export interface StatusValues {
@@ -32,7 +36,7 @@ function field(label: string, readout: string): { wrap: HTMLElement; value: HTML
   return { wrap, value };
 }
 
-export function createStatusBar(): StatusRefs {
+export function createStatusBar({ buildSha }: { buildSha: string }): StatusRefs {
   const element = document.createElement('header');
   element.className = 'status-bar';
 
@@ -42,7 +46,12 @@ export function createStatusBar(): StatusRefs {
   const post = field('POST', 'status.post');
   const delay = field('DELAY', 'status.delay');
 
-  element.append(time.wrap, warp.wrap, warpEffective.wrap, post.wrap, delay.wrap);
+  const build = document.createElement('span');
+  build.className = 'build-tag';
+  build.dataset.readout = 'status.build';
+  build.textContent = `GRAVITON build ${buildSha}`;
+
+  element.append(time.wrap, warp.wrap, warpEffective.wrap, post.wrap, delay.wrap, build);
 
   return {
     element,
@@ -51,6 +60,7 @@ export function createStatusBar(): StatusRefs {
     warpEffective: warpEffective.value,
     post: post.value,
     delay: delay.value,
+    build,
   };
 }
 

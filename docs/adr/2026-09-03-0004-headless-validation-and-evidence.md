@@ -29,6 +29,8 @@ pixels (text anti-aliasing), so the two can never share pixel goldens.
    the warp ease is disabled, so `render()` is synchronous. Production pages
    never expose it. URL parameters (`level`, `seed`, `tick`, `zoom`, `w`, `h`)
    make any shot reproducible from a link.
+
+   > **SUPERSEDED 2026-09-18 → docs/evidence/GRV-0011/README.md:** loadRun shipped as run.
 2. **Readouts are DOM text.** Every displayed value carries
    `data-readout="<panel>.<field>"`; verifiers assert the displayed string, so
    a green simulation with a broken panel still fails.

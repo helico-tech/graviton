@@ -7,7 +7,7 @@ import { createApp } from './app.ts';
 import type { App } from './app.ts';
 import { installDebugApi } from './debug-api.ts';
 import type { DebugApiDriver } from './debug-api.ts';
-import { WARP_EASE_MS, easedWarpValue, effectiveTicksThisFrame } from './loop.ts';
+import { effectiveTicksThisFrame, warpEaseFrame } from './loop.ts';
 import { parseSelectionParam, pickAt } from './selection.ts';
 import { ticksPerFrame } from './warp.ts';
 import {
@@ -48,10 +48,10 @@ if (!root) throw new Error('main: #app is missing from index.html');
 root.replaceChildren();
 root.className = 'shell';
 
-const status = createStatusBar();
+const status = createStatusBar({ buildSha: __BUILD_SHA__ });
 const plot = createPlotRegion();
 const selectionPanel = createSelectionPanel();
-const timelineStrip = createTimelineStrip({ buildSha: __BUILD_SHA__ });
+const timelineStrip = createTimelineStrip();
 root.append(status.element, plot.element, selectionPanel.element, timelineStrip.element);
 
 let showingError = false;
@@ -149,7 +149,7 @@ window.addEventListener('resize', () => {
 
 // The warp change ease (GAME-0002 §9): only the displayed WARP label tweens over ~150 ms, driven
 // entirely by this rAF loop -- disabled in debug mode simply because that loop never starts
-// there, so the label is always exactly correct and synchronous (loop.ts's easedWarpValue).
+// there, so the label is always exactly correct and synchronous (loop.ts's warpEaseFrame).
 let warpAnim: { from: number; to: number; start: number } | null = null;
 
 function changeWarp(mutate: () => void): void {
@@ -176,13 +176,14 @@ if (!debug) {
     if (ticks > 0) app.step(ticks); // step's onChange already re-renders the plot
 
     if (warpAnim) {
+      // docs/issues/2026-09-18-warp-label-sticks-on-eased-value.md: write every animated frame,
+      // including the one that finishes the ease -- real frame spacing never guarantees one lands
+      // inside the eased window, and warpEaseFrame's `finished` is only ever true alongside the
+      // exact target value, never a stale rounded fraction.
       const elapsed = now - warpAnim.start;
-      if (elapsed < WARP_EASE_MS) {
-        const value = easedWarpValue({ from: warpAnim.from, to: warpAnim.to, elapsedMs: elapsed });
-        status.warp.textContent = `${Math.round(value)}x`;
-      } else {
-        warpAnim = null; // the target text is already correct from the last render
-      }
+      const frame = warpEaseFrame({ from: warpAnim.from, to: warpAnim.to, elapsedMs: elapsed });
+      status.warp.textContent = `${Math.round(frame.value)}x`;
+      if (frame.finished) warpAnim = null;
     }
 
     requestAnimationFrame(frame);

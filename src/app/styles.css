@@ -308,7 +308,11 @@ body {
   color: var(--text-disabled);
 }
 
+/* GRV-0024: pushed to the status bar's right edge within its flex row -- the bar has no other
+   right-aligned content to share the margin with, so `auto` on just this one child is enough. */
 .build-tag {
+  margin-left: auto;
+  align-self: center;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-disabled);
