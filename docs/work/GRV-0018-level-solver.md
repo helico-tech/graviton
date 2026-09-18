@@ -1,7 +1,7 @@
 ---
 id: GRV-0018
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0018 Level solver
 
@@ -29,3 +29,11 @@ hand-author a launch to nine significant digits (ADR-0006 §5, research 03 §B.1
   minutes (recorded in the evidence, not run in the unit suite).
 
 **Verification.** `pnpm check`, the recorded solver runs in `docs/evidence/GRV-0018/`.
+
+**Delivered.** `src/levels/solve.ts` + `scripts/levels-solve.ts`: a staged, dt-laddered,
+derivative-free search over the real simulation clears the compiler fixture from scratch (4.4 s),
+GRV-0017's own previously-unsolvable rail/contact pairing (2.0 s), and a multi-day interplanetary
+transfer (36.7 s, 13.87-day flight, `dt/2` agreeing exactly) -- see
+`docs/evidence/GRV-0018/README.md` for the recorded runs, a solver bug found and fixed along the
+way, and a level-authoring finding (orbital phase has to be chosen for reachability, generalising
+GRV-0017's own finding about target angular size).
