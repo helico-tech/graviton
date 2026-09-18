@@ -13,6 +13,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import { createDebugSession } from '../app/debug-api.ts';
+import { parseSelectionParam } from '../app/selection.ts';
+import type { SelectionTarget } from '../app/selection.ts';
 import { createTrailSet, sampleTrailSet, trailPoints } from '../app/trails.ts';
 import { defaultView } from '../render/camera.ts';
 import type { View } from '../render/camera.ts';
@@ -74,6 +76,7 @@ export interface RenderFlags {
   width: number;
   height: number;
   solution: boolean;
+  select?: SelectionTarget;
   out: string;
 }
 
@@ -90,6 +93,7 @@ export function parseRenderFlags(argv: string[]): RenderFlags {
     width: flags.w !== undefined ? Number(flags.w) : 1280,
     height: flags.h !== undefined ? Number(flags.h) : 720,
     solution: flags.solution === 'true',
+    select: flags.select !== undefined ? parseSelectionParam(flags.select) : undefined,
     out: flags.out,
   };
 }
@@ -145,6 +149,7 @@ export function renderLevel(flags: RenderFlags): RenderResult {
     trails,
     canvasWidth: flags.width,
     canvasHeight: flags.height,
+    selection: flags.select ?? null,
   });
 
   fs.mkdirSync(path.dirname(flags.out), { recursive: true });

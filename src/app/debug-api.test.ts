@@ -75,6 +75,14 @@ describe('createDebugSession', () => {
     expect(() => session.command(launchCommand({ tick: 0 }))).not.toThrow();
   });
 
+  test('state() carries one body position per scenario body (GRV-0023: for a headless click driver)', () => {
+    const session = createDebugSession();
+    const loaded = session.load({ scenario: scenario(), seed: 1 });
+
+    expect(loaded.bodies).toHaveLength(1);
+    expect(loaded.bodies[0]).toEqual({ x: 0, y: 0 }); // the sole body here is the primary, at the origin
+  });
+
   test('state() is a read-only copy, not the live arrays', () => {
     const session = createDebugSession();
     session.load({ scenario: scenario(), seed: 1 });
@@ -180,5 +188,36 @@ describe('createDebugSession', () => {
     expect(frame.tick).toBe(0);
     expect(frame.bodies).toHaveLength(1);
     expect(frame.bodies[0]!.id).toBe('origin');
+  });
+
+  const emptyLevel = {
+    bodyIds: ['origin'],
+    railIds: ['launch-rail'],
+    contactIds: [],
+    bodyClasses: ['rock'],
+    names: { bodies: ['Origin'], rails: ['Launch Rail'], contacts: [] },
+  };
+
+  test('describeSelection reads the loaded sim through src/app/selection.ts', () => {
+    const session = createDebugSession();
+    session.load({ scenario: scenario(), seed: 1 });
+    session.command(launchCommand());
+    session.step(1);
+
+    const rows = session.describeSelection(emptyLevel, { kind: 'probe', index: 0 });
+
+    expect(rows.find((r) => r.key === 'state')?.value).toBe('FLYING');
+  });
+
+  test('describeSelection returns no rows for a null selection', () => {
+    const session = createDebugSession();
+    session.load({ scenario: scenario(), seed: 1 });
+
+    expect(session.describeSelection(emptyLevel, null)).toEqual([]);
+  });
+
+  test('describeSelection(level, null) never throws even before anything is loaded', () => {
+    const session = createDebugSession();
+    expect(session.describeSelection(emptyLevel, null)).toEqual([]);
   });
 });

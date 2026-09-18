@@ -9,11 +9,16 @@ import { createDebugSession } from './debug-api.ts';
 import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts';
 import { getLevel, levelIds } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
+import { selectionName as selectionNameOf } from './selection.ts';
+import type { ReadoutRow, Selection } from './selection.ts';
+import { getSolution } from './solutions.ts';
+import type { CompiledSolution } from './solutions.ts';
 import { formatSimTime } from './time.ts';
 import { createTrailSet, resetTrailSet, sampleTrailSet, trailPoints } from './trails.ts';
 import type { TrailSet } from './trails.ts';
 import { clampRung, stepRung, ticksPerFrame, togglePause as togglePauseRung } from './warp.ts';
 import type { WarpRung } from './warp.ts';
+import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
 
@@ -41,6 +46,18 @@ export interface PlotError {
 export interface Brief {
   name: string;
   text: string;
+}
+
+export interface TimelineMark {
+  readonly key: string;
+  readonly tick: number;
+  readonly label: string;
+}
+
+export interface TimelineData {
+  readonly marks: readonly TimelineMark[];
+  readonly cursor: { readonly tick: number; readonly label: string };
+  readonly rangeTicks: number;
 }
 
 export interface AppChange {
@@ -72,6 +89,27 @@ export interface App {
   /** Every dynamic object's flown trail so far, keyed by object index (src/app/trails.ts) --
    *  sampled once per tick `step`/`warpTo` actually advanced, never derived. */
   trails(): ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** Sets the app's selection state (GRV-0023): the renderer only ever reads it back through
+   *  `frame()`'s sibling, the plot controller's own selection arg -- the app owns it. */
+  select(selection: Selection): void;
+  selection(): Selection;
+  /** Every selection-panel field for the current selection, read straight from the loaded session
+   *  (src/app/selection.ts's `describeSelection`, never from `frame()` -- rule 11). `[]` before
+   *  anything is loaded or selected. */
+  selectionReadouts(): ReadoutRow[];
+  /** The emphasis-size id/name line for the current selection (GAME-0002 §8) -- `''` when nothing
+   *  is selected. */
+  selectionName(): string;
+  /** Applies the loaded level's committed solution log (src/app/solutions.ts), the same log
+   *  `?solution=1` applies -- a no-op before a level is loaded or if it has no committed solution. */
+  loadSolution(): void;
+  /** The solution `loadSolution()` last applied, for the timeline strip's launch marks and its
+   *  default tick range; `null` until `loadSolution()` succeeds. */
+  solution(): CompiledSolution | null;
+  /** The timeline strip's marks (a launch per command in the loaded solution, an impact per
+   *  contact once `state().contacts[i].impactTick` records one), present-time cursor and axis
+   *  range -- `null` before anything is loaded, like `state()`/`hash()`. */
+  timelineData(): TimelineData | null;
 }
 
 const DASH = '—';
@@ -92,6 +130,9 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   let rung: WarpRung = 0;
   let lastNonZeroRung: WarpRung = 1;
   let levelNames: FrameLevelNames = EMPTY_LEVEL_NAMES;
+  let currentLevelId: string | null = null;
+  let currentSelection: Selection = null;
+  let currentSolution: CompiledSolution | null = null;
   const trailSet: TrailSet = createTrailSet();
 
   function statusValues(): StatusValues {
@@ -122,6 +163,9 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       postName = DASH;
       brief = null;
       levelNames = EMPTY_LEVEL_NAMES;
+      currentLevelId = null;
+      currentSelection = null;
+      currentSolution = null;
       resetTrailSet(trailSet);
       emit({ id, knownIds: levelIds() }, true);
       return undefined;
@@ -132,6 +176,9 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     postName = hostBody === undefined ? DASH : (level.names.bodies[hostBody] ?? DASH);
     brief = { name: level.name, text: level.brief };
     levelNames = level;
+    currentLevelId = level.id;
+    currentSelection = null;
+    currentSolution = null;
     resetTrailSet(trailSet);
     resetWarp();
     ready = true;
@@ -145,11 +192,53 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     currentDt = args.scenario.dt;
     postName = DASH; // a raw Scenario carries no body names to read a post from
     levelNames = EMPTY_LEVEL_NAMES;
+    currentLevelId = null; // a raw Scenario has no level id, so no committed solution to find
+    currentSelection = null;
+    currentSolution = null;
     resetTrailSet(trailSet);
     resetWarp();
     ready = true;
     emit(null, true);
     return snap;
+  }
+
+  function loadSolution(): void {
+    if (currentLevelId === null) return;
+    const solution = getSolution(currentLevelId);
+    if (!solution) return;
+    for (const command of solution.log) session.command(command);
+    currentSolution = solution;
+    emit();
+  }
+
+  function timelineData(): TimelineData | null {
+    if (!ready || currentDt === null) return null;
+    const dt = currentDt;
+    const snap = session.state();
+    const marks: TimelineMark[] = [];
+    (currentSolution?.log ?? []).forEach((command, index) => {
+      if (command.kind === 'launch') {
+        marks.push({
+          key: `launch.${index}`,
+          tick: command.tick,
+          label: formatSimTime({ tick: command.tick, dt }),
+        });
+      }
+    });
+    snap.contacts.forEach((contact, index) => {
+      if (contact.impactTick !== NO_IMPACT) {
+        marks.push({
+          key: `impact.${index}`,
+          tick: contact.impactTick,
+          label: formatSimTime({ tick: contact.impactTick, dt }),
+        });
+      }
+    });
+    return {
+      marks,
+      cursor: { tick: snap.tick, label: formatSimTime({ tick: snap.tick, dt }) },
+      rangeTicks: currentSolution?.ticks ?? Math.max(snap.tick, 1),
+    };
   }
 
   function step(ticks: number): StateSnapshot {
@@ -190,5 +279,15 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       trailSet.buffers.forEach((buffer, index) => points.set(index, trailPoints(buffer)));
       return points;
     },
+    select: (sel) => {
+      currentSelection = sel;
+      emit();
+    },
+    selection: () => currentSelection,
+    selectionReadouts: () => session.describeSelection(levelNames, currentSelection),
+    selectionName: () => selectionNameOf({ level: levelNames, selection: currentSelection }),
+    loadSolution,
+    solution: () => currentSolution,
+    timelineData,
   };
 }

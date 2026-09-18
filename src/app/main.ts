@@ -8,6 +8,7 @@ import type { App } from './app.ts';
 import { installDebugApi } from './debug-api.ts';
 import type { DebugApiDriver } from './debug-api.ts';
 import { WARP_EASE_MS, easedWarpValue, effectiveTicksThisFrame } from './loop.ts';
+import { parseSelectionParam, pickAt } from './selection.ts';
 import { ticksPerFrame } from './warp.ts';
 import {
   clearPlot,
@@ -19,10 +20,15 @@ import {
   showPlotError,
 } from '../ui/plot.ts';
 import type { PlotController } from '../ui/plot.ts';
-import { createSelectionPanel, createTimelineStrip } from '../ui/panels.ts';
+import { createSelectionPanel, renderSelection } from '../ui/selection.ts';
 import { createStatusBar, renderStatus } from '../ui/status.ts';
+import { createTimelineStrip, renderTimeline } from '../ui/timeline.ts';
 
 declare const __BUILD_SHA__: string;
+
+// Generous relative to the ~4-8 px markers themselves (GRV-0022's marker radii): a click needs to
+// land near a thing, not exactly on its centre pixel.
+const SELECT_RADIUS_PX = 12;
 
 const params = new URLSearchParams(window.location.search);
 const debug = params.get('debug') === '1';
@@ -34,6 +40,8 @@ const heightParam = params.get('h');
 const zoomParam = params.get('zoom');
 const cxParam = params.get('cx');
 const cyParam = params.get('cy');
+const solutionParam = params.get('solution');
+const selectParam = params.get('select');
 
 const root = document.getElementById('app');
 if (!root) throw new Error('main: #app is missing from index.html');
@@ -42,11 +50,21 @@ root.className = 'shell';
 
 const status = createStatusBar();
 const plot = createPlotRegion();
-const selection = createSelectionPanel();
-const timeline = createTimelineStrip({ buildSha: __BUILD_SHA__ });
-root.append(status.element, plot.element, selection, timeline);
+const selectionPanel = createSelectionPanel();
+const timelineStrip = createTimelineStrip({ buildSha: __BUILD_SHA__ });
+root.append(status.element, plot.element, selectionPanel.element, timelineStrip.element);
 
 let showingError = false;
+
+function renderSelectionAndTimeline(): void {
+  renderSelection(selectionPanel, {
+    hasSelection: app.selection() !== null,
+    name: app.selectionName(),
+    rows: app.selectionReadouts(),
+  });
+  const timeline = app.timelineData();
+  if (timeline) renderTimeline(timelineStrip, timeline);
+}
 
 // `onChange` references `plotController`, declared below -- fine, since `onChange` only ever
 // runs once `app.loadLevel`/`step` are called further down this file, well after
@@ -65,13 +83,32 @@ const app: App = createApp({
     }
     if (brief) showBrief(plot, brief);
     else hideBrief(plot);
+    renderSelectionAndTimeline();
   },
 });
+
+// Referenced by `onSelect` before it's assigned -- safe for the same reason `onChange` above can
+// reference `plotController`: nothing calls it until user input or the debug API fires, well after
+// this module finishes evaluating.
+function onCanvasSelect({ screenX, screenY }: { screenX: number; screenY: number }): void {
+  const result = pickAt({
+    frame: app.frame(),
+    view: plotController.getView(),
+    canvasWidth: plot.canvas.width,
+    canvasHeight: plot.canvas.height,
+    screenX,
+    screenY,
+    radiusPx: SELECT_RADIUS_PX,
+  });
+  app.select(result);
+}
 
 const plotController: PlotController = createPlotController({
   refs: plot,
   getFrame: () => app.frame(),
   getTrails: () => app.trails(),
+  getSelection: () => app.selection(),
+  onSelect: onCanvasSelect,
 });
 plotController.attachInput();
 
@@ -82,6 +119,10 @@ if (widthParam !== null && heightParam !== null) {
 }
 
 app.loadLevel(levelId);
+// ?solution=1 replays the level's committed solution (GRV-0023) -- applied before ?tick=/?warp=
+// so a warp past the launch tick actually flies it, the same way loadSolution() + warpTo() does
+// from the debug API.
+if (solutionParam === '1') app.loadSolution();
 // ?tick=<n> reproduces a shot at a given moment, then pauses; ?warp=<rung> sets the rung for the
 // shot directly, overriding the pause a bare ?tick would otherwise leave behind (ADR-0004 §1).
 if (tickParam !== null) app.warpTo(Number(tickParam));
@@ -97,6 +138,9 @@ if (zoomParam !== null || cxParam !== null || cyParam !== null) {
   });
   if (!showingError) plotController.render();
 }
+
+// ?select=<kind>:<index> reproduces a hero frame with something already selected (ADR-0004 §1).
+if (selectParam !== null) app.select(parseSelectionParam(selectParam));
 
 window.addEventListener('resize', () => {
   if (showingError) clearPlot(plot);
@@ -160,5 +204,8 @@ const driver: DebugApiDriver = {
   frameHash: () => plotController.frameHash(),
   view: () => plotController.getView(),
   setView: (patch) => plotController.setView(patch),
+  select: (sel) => app.select(sel),
+  selection: () => app.selection(),
+  loadSolution: () => app.loadSolution(),
 };
 installDebugApi(driver);

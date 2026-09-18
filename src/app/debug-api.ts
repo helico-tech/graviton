@@ -14,11 +14,19 @@ import { advance, createSim, hashSim } from '../sim/sim.ts';
 import type { Command, Scenario, Sim } from '../sim/sim.ts';
 import { SIM_VERSION } from '../sim/version.ts';
 import { readAllReadouts } from '../ui/readouts.ts';
+import { evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
 import { captureFrame as captureFrameOf } from '../render/frame.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
 import type { View } from '../render/camera.ts';
+import { describeSelection as describeSelectionOf } from './selection.ts';
+import type { ReadoutRow, Selection } from './selection.ts';
 
 declare const __BUILD_SHA__: string;
+
+export interface BodySnapshot {
+  x: number;
+  y: number;
+}
 
 export interface ObjectSnapshot {
   x: number;
@@ -41,6 +49,11 @@ export interface ContactSnapshot {
 export interface StateSnapshot {
   tick: number;
   count: number;
+  /** Every body's current world position (GRV-0023): unlike objects/contacts, bodies are on
+   *  published orbits and always shown at their true current position (determinism rule 12), so
+   *  there is no signal-delay reason to withhold this -- a headless driver needs it to compute a
+   *  click's screen coordinates without duplicating captureFrame's ephemeris evaluation. */
+  bodies: BodySnapshot[];
   objects: ObjectSnapshot[];
   contacts: ContactSnapshot[];
 }
@@ -89,6 +102,11 @@ export interface DebugSession {
    *  the one place outside `src/render` a live `Sim` is read for drawing; `Sim` itself never
    *  leaves this module. */
   captureFrame(level: FrameLevelNames): Frame;
+  /** Every selection-panel field for `selection`, computed straight from the loaded `Sim`
+   *  (src/app/selection.ts's `describeSelection`, GRV-0023) -- mirrors `captureFrame`'s boundary:
+   *  the one place outside `src/render` (this module) a live `Sim` is read, `Sim` itself never
+   *  leaves it. */
+  describeSelection(level: FrameLevelNames, selection: Selection): ReadoutRow[];
   /** Runs a fresh, independent `Sim` to completion and reports its hash and
    *  final tick -- the loaded session (if any) is untouched. */
   run(args: RunArgs): RunResult;
@@ -99,6 +117,16 @@ export interface DebugSession {
  *  and a fresh array is built on every call (research §4: `state()` is
  *  read-only). */
 function snapshot(sim: Sim): StateSnapshot {
+  const eph = {
+    x: new Float64Array(sim.bodies.count),
+    y: new Float64Array(sim.bodies.count),
+    vx: new Float64Array(sim.bodies.count),
+    vy: new Float64Array(sim.bodies.count),
+  };
+  evaluateEphemeris(sim.bodies, sim.tick * sim.scenario.dt, eph);
+  const bodies: BodySnapshot[] = [];
+  for (let i = 0; i < sim.bodies.count; i++) bodies.push({ x: eph.x[i]!, y: eph.y[i]! });
+
   const o = sim.objects;
   const objects: ObjectSnapshot[] = [];
   for (let i = 0; i < o.count; i++) {
@@ -125,7 +153,7 @@ function snapshot(sim: Sim): StateSnapshot {
     });
   }
 
-  return { tick: sim.tick, count: o.count, objects, contacts };
+  return { tick: sim.tick, count: o.count, bodies, objects, contacts };
 }
 
 export function createDebugSession(): DebugSession {
@@ -185,6 +213,15 @@ export function createDebugSession(): DebugSession {
       return captureFrameOf({ sim: loaded(), level });
     },
 
+    describeSelection(level, selection) {
+      // A null selection never needs the loaded sim (describeSelectionOf's own contract, see
+      // selection.ts) -- checked here too, rather than only inside the pure function, so this
+      // stays answerable before anything is loaded (app.ts's selectionReadouts() calls it on
+      // every render, including a failed loadLevel's, where `loaded()` below would throw).
+      if (!selection) return [];
+      return describeSelectionOf({ sim: loaded(), level, selection });
+    },
+
     run({ scenario, seed, log: runLog, ticks }) {
       const fresh = createSim({ scenario, seed });
       advance({ sim: fresh, log: runLog, ticks });
@@ -217,6 +254,11 @@ export interface DebugApiDriver {
   frameHash(): string;
   view(): View;
   setView(patch: Partial<View>): void;
+  select(selection: Selection): void;
+  selection(): Selection;
+  /** Applies the loaded level's committed solution log to the session (GRV-0023), the same way
+   *  `?solution=1` does. A no-op if nothing is loaded or the level has no committed solution. */
+  loadSolution(): void;
 }
 
 export interface DebugApi {
@@ -252,6 +294,9 @@ export interface DebugApi {
    *  "view() returns a copy"); call `setView` to change it. */
   view(): View;
   setView(patch: Partial<View>): void;
+  select(selection: Selection): void;
+  selection(): Selection;
+  loadSolution(): void;
 }
 
 declare global {
@@ -294,6 +339,9 @@ export function installDebugApi(driver: DebugApiDriver): void {
     frameHash: () => driver.frameHash(),
     view: () => driver.view(),
     setView: (patch) => driver.setView(patch),
+    select: (selection) => driver.select(selection),
+    selection: () => driver.selection(),
+    loadSolution: () => driver.loadSolution(),
   };
   window.graviton = api;
 

@@ -9,6 +9,12 @@ test('parses --out, defaults width/height to 1280x720', () => {
     width: 1280,
     height: 720,
     debug: false,
+    solution: false,
+    tick: undefined,
+    zoom: undefined,
+    cx: undefined,
+    cy: undefined,
+    select: undefined,
   });
 });
 
@@ -26,6 +32,16 @@ test('parses every flag', () => {
       '--h',
       '540',
       '--debug',
+      '--tick',
+      '3298',
+      '--zoom',
+      '80000',
+      '--cx',
+      '1e9',
+      '--cy',
+      '-2e8',
+      '--select',
+      'probe:0',
     ]),
   ).toEqual({
     url: 'https://example.com',
@@ -34,7 +50,17 @@ test('parses every flag', () => {
     width: 960,
     height: 540,
     debug: true,
+    solution: false,
+    tick: '3298',
+    zoom: '80000',
+    cx: '1e9',
+    cy: '-2e8',
+    select: 'probe:0',
   });
+});
+
+test('--solution implies --debug (the page has no other way to load one)', () => {
+  expect(parseScreenshotFlags(['--out', 'shot.png', '--solution']).debug).toBe(true);
 });
 
 test('--out is required', () => {

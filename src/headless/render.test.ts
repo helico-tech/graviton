@@ -58,6 +58,24 @@ describe('parseRenderFlags', () => {
     expect(() => parseRenderFlags(['--out', 'x.png'])).toThrow(/--level/);
     expect(() => parseRenderFlags(['--level', 'L01-intercept'])).toThrow(/--out/);
   });
+
+  test('--select <kind>:<index> parses through src/app/selection.ts, shared rather than reimplemented', () => {
+    const flags = parseRenderFlags([
+      '--level',
+      'L01-intercept',
+      '--select',
+      'probe:0',
+      '--out',
+      'x.png',
+    ]);
+    expect(flags.select).toEqual({ kind: 'probe', index: 0 });
+  });
+
+  test('--select rejects a malformed value the same way parseSelectionParam does', () => {
+    expect(() =>
+      parseRenderFlags(['--level', 'L01-intercept', '--select', 'nope', '--out', 'x.png']),
+    ).toThrow();
+  });
 });
 
 describe('renderLevel', () => {
@@ -130,6 +148,23 @@ describe('renderLevel', () => {
     expect(before.tick).toBe(impactTick);
     expect(after.tick).toBe(impactTick + 1);
     expect(before.hash).not.toBe(after.hash);
+  });
+
+  test('--select draws the ring, changing the frame hash from an unselected render of the same tick', () => {
+    const args = {
+      level: 'L01-intercept',
+      tick: 100,
+      width: 320,
+      height: 180,
+      solution: false,
+    } as const;
+    const unselected = renderLevel({ ...args, out: scratchPath('render-test-select-none.png') });
+    const selected = renderLevel({
+      ...args,
+      select: { kind: 'rail', index: 0 },
+      out: scratchPath('render-test-select-rail.png'),
+    });
+    expect(selected.frameHash).not.toBe(unselected.frameHash);
   });
 
   test('two renders of the same tick are byte-identical (determinism)', () => {
