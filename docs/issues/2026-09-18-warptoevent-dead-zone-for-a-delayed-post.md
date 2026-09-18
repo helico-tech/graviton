@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P2
 filed: 2026-09-18
 filed-by: agent
@@ -42,3 +42,5 @@ underlying gap. Widening `src/app/app.ts`'s core event-targeting logic for a par
 exactly the kind of improvisation this unit's brief said to flag instead of attempting solo.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0031, commit 2b8c1e6. upcomingEvents() now targets a still-pending command's own arrival tick (session.pendingCommandArrivals()) instead of dropping it once its issue tick has passed; a predicted event now targets its own downlink-confirmed tick (downlinkArrivalOf) rather than the bare true tick. warpToEvent() no longer stalls between issue and materialisation for a delayed post (T01-far-post), confirmed end to end in tests/e2e/horizon.spec.ts and tests/e2e/telemetry.spec.ts.
