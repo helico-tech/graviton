@@ -190,14 +190,26 @@ body {
 }
 
 .selection-panel,
+.planner-panel,
+.solution-panel,
 .timeline-strip {
   background: var(--panel);
   padding: 10px 14px;
 }
 
-.selection-panel {
+/* SELECTION, PLAN and SOLUTION stack in this one shell region (GAME-0002 §8, GRV-0026); the
+   panels themselves stay plain blocks, only this wrapper carries the grid placement and the
+   scroll -- src/app/main.ts's own comment on why. */
+.right-column {
   grid-area: selection;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.planner-panel,
+.solution-panel {
+  border-top: 1px solid var(--hairline);
 }
 
 /* The emphasis-size id/name line under the header (GAME-0002 §3's "Value, emphasis" row, §8's
@@ -301,11 +313,53 @@ body {
   white-space: nowrap;
 }
 
-.placeholder {
+/* .plan-empty/.solution-empty are their own classes, not `.placeholder` reused, so
+   tests/e2e/selection.spec.ts's own singular `.placeholder` match stays singular
+   (src/ui/planner.ts's note) -- the three still share one visual style. */
+.placeholder,
+.plan-empty,
+.solution-empty {
   margin: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-disabled);
+}
+
+/* The PLAN panel's own reason line (GRV-0026 design note: "disabled with a reason") -- amber, the
+   colour for anything unresolved/unverified (GAME-0002 §2), never the alarm red (nothing here is
+   an emergency, a launch is simply not yet feasible). */
+.plan-issue {
+  margin: 10px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--unverified);
+}
+
+/* Commit/Discard (GRV-0026 design note: "styled as instrument keys, no animation" -- GAME-0002 §9
+   forbids hover/press transitions here same as everywhere else on this console). */
+.planner-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.instrument-key {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--panel-raised);
+  border: 1px solid var(--hairline);
+  color: var(--text-primary);
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.instrument-key:disabled {
+  color: var(--text-disabled);
+  cursor: default;
 }
 
 /* GRV-0024: pushed to the status bar's right edge within its flex row -- the bar has no other

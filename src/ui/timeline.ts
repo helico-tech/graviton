@@ -97,3 +97,48 @@ export function renderTimeline(
     }),
   );
 }
+
+/** Horizon scrub (GAME-0001 §4.6 "dragging a horizon time"): pressing on the cursor itself and
+ *  dragging along the axis reports a tick; releasing reports `null` ("the present"). Gated by
+ *  `canScrub` (main.ts: paused only, GRV-0026 acceptance) rather than here, so this stays a plain
+ *  pointer-to-tick mapping with no simulation-state opinion of its own. */
+export function attachTimelineScrub(
+  refs: TimelineRefs,
+  {
+    canScrub,
+    rangeTicks,
+    onScrub,
+  }: {
+    canScrub: () => boolean;
+    rangeTicks: () => number;
+    onScrub: (tick: number | null) => void;
+  },
+): void {
+  let dragging = false;
+
+  const tickAt = (clientX: number): number => {
+    const rect = refs.axis.getBoundingClientRect();
+    const fraction = rect.width > 0 ? (clientX - rect.left) / rect.width : 0;
+    return Math.round(Math.min(1, Math.max(0, fraction)) * rangeTicks());
+  };
+
+  refs.axis.addEventListener('pointerdown', (event) => {
+    if (!canScrub()) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.closest('.timeline-cursor')) return;
+    dragging = true;
+    refs.axis.setPointerCapture(event.pointerId);
+    onScrub(tickAt(event.clientX));
+  });
+  refs.axis.addEventListener('pointermove', (event) => {
+    if (!dragging) return;
+    onScrub(tickAt(event.clientX));
+  });
+  const release = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    onScrub(null);
+  };
+  refs.axis.addEventListener('pointerup', release);
+  refs.axis.addEventListener('pointercancel', release);
+}

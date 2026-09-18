@@ -20,6 +20,8 @@ import type { Frame, FrameLevelNames } from '../render/frame.ts';
 import type { View } from '../render/camera.ts';
 import { describeSelection as describeSelectionOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
+import type { FlightPlan } from '../planner/plan.ts';
+import type { SolutionReadout } from '../planner/readout.ts';
 
 declare const __BUILD_SHA__: string;
 
@@ -85,6 +87,12 @@ export interface DebugSession {
    *  back), so this is caught here rather than surfacing later as a
    *  dropped command. */
   command(cmd: Command): void;
+  /** The committed log exactly as `advance` would replay it (GRV-0026): the planner's own
+   *  reintegration (src/app/planner.ts's `reintegrate`) needs it to reproduce the world up to a
+   *  draft's launch tick, the same way `integrateGhost` itself replays "everything already
+   *  committed". Read-only by contract (`readonly Command[]`), the live array by reference -- like
+   *  `state()`'s snapshot, callers never see `Sim` itself, only plain data it already owns. */
+  log(): readonly Command[];
   step(ticks: number): StateSnapshot;
   /** `step`, but advancing one tick at a time and calling `onTick` with every live object's
    *  position after each tick -- the shared "tick-advance-with-trails" loop app.ts and
@@ -98,10 +106,10 @@ export interface DebugSession {
   ): StateSnapshot;
   hash(): string;
   state(): StateSnapshot;
-  /** A read-only render snapshot of the loaded `Sim` at its current tick (src/render/frame.ts) --
-   *  the one place outside `src/render` a live `Sim` is read for drawing; `Sim` itself never
-   *  leaves this module. */
-  captureFrame(level: FrameLevelNames): Frame;
+  /** A read-only render snapshot of the loaded `Sim` (src/render/frame.ts) -- the one place
+   *  outside `src/render` a live `Sim` is read for drawing; `Sim` itself never leaves this module.
+   *  `t`, if given, is the horizon scrub's own override (GRV-0026, captureFrame's own doc). */
+  captureFrame(level: FrameLevelNames, t?: number): Frame;
   /** Every selection-panel field for `selection`, computed straight from the loaded `Sim`
    *  (src/app/selection.ts's `describeSelection`, GRV-0023) -- mirrors `captureFrame`'s boundary:
    *  the one place outside `src/render` (this module) a live `Sim` is read, `Sim` itself never
@@ -183,6 +191,8 @@ export function createDebugSession(): DebugSession {
       log.push(cmd);
     },
 
+    log: () => log,
+
     step(ticks) {
       const s = loaded();
       advance({ sim: s, log, ticks });
@@ -209,8 +219,8 @@ export function createDebugSession(): DebugSession {
       return snapshot(loaded());
     },
 
-    captureFrame(level) {
-      return captureFrameOf({ sim: loaded(), level });
+    captureFrame(level, t) {
+      return captureFrameOf({ sim: loaded(), level, t });
     },
 
     describeSelection(level, selection) {
@@ -259,6 +269,14 @@ export interface DebugApiDriver {
   /** Applies the loaded level's committed solution log to the session (GRV-0023), the same way
    *  `?solution=1` does. A no-op if nothing is loaded or the level has no committed solution. */
   loadSolution(): void;
+  // -- Planner (GRV-0026) -- App's own plan()/setPlan()/commitPlan()/setHorizon() reused verbatim;
+  // `planSolution` is named to avoid colliding with App's own `solution()` (the committed campaign
+  // solution log above), and is exposed here as `solution` to match the debug API's own naming.
+  plan(): FlightPlan | null;
+  setPlan(plan: FlightPlan): void;
+  commitPlan(): void;
+  setHorizon(tick: number | null): void;
+  planSolution(): SolutionReadout | null;
 }
 
 export interface DebugApi {
@@ -297,6 +315,14 @@ export interface DebugApi {
   select(selection: Selection): void;
   selection(): Selection;
   loadSolution(): void;
+  // -- Planner (GRV-0026, docs/work/GRV-0026-planner-overlay.md's own debug-API list).
+  plan(): FlightPlan | null;
+  setPlan(plan: FlightPlan): void;
+  commitPlan(): void;
+  setHorizon(tick: number | null): void;
+  /** The current draft's ghost solution readout (src/planner/readout.ts) -- `null` without a
+   *  draft, a ghost, or a currently feasible launch. */
+  solution(): SolutionReadout | null;
 }
 
 declare global {
@@ -342,6 +368,11 @@ export function installDebugApi(driver: DebugApiDriver): void {
     select: (selection) => driver.select(selection),
     selection: () => driver.selection(),
     loadSolution: () => driver.loadSolution(),
+    plan: () => driver.plan(),
+    setPlan: (plan) => driver.setPlan(plan),
+    commitPlan: () => driver.commitPlan(),
+    setHorizon: (tick) => driver.setHorizon(tick),
+    solution: () => driver.planSolution(),
   };
   window.graviton = api;
 

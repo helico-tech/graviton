@@ -58,6 +58,10 @@ evidence (ADR-0006 §5); `--check` is part of `pnpm check`. A campaign level wit
 solvable. In the page itself, `?solution=1` (or debug `loadSolution()`) applies the loaded level's
 committed solution log, so it replays exactly as recorded (GRV-0023).
 
+The planner overlay (EPIC-06) adds `plan()`/`setPlan(plan)`/`commitPlan()`/`setHorizon(tick|null)`/
+`solution()` to `window.graviton` (GRV-0026): `solution()` is the *draft's own ghost* readout
+(`src/planner/readout.ts`), distinct from `App.solution()`'s committed campaign log above.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;
