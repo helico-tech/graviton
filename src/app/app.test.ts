@@ -56,6 +56,7 @@ describe('createApp: raw scenario loads (the parity-spec path)', () => {
       status: { time: 'T+00:00:00:00', warp: '0x', warpEffective: '0x', post: '—', delay: '—' },
       plotError: null,
       brief: null,
+      justLoaded: true,
     });
   });
 
@@ -196,5 +197,75 @@ describe('createApp: command and hash passthrough', () => {
 
     expect(result.tick).toBe(5);
     expect(app.hash()).toBe(before);
+  });
+});
+
+describe('createApp: frame() and trails()', () => {
+  test('frame() throws before anything is loaded, like state()/hash()', () => {
+    const app = createApp({ onChange: () => {} });
+    expect(() => app.frame()).toThrow();
+  });
+
+  test('frame() reflects the loaded scenario at tick 0, with no objects yet', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    const frame = app.frame();
+
+    expect(frame.tick).toBe(0);
+    expect(frame.dt).toBe(DT);
+    expect(frame.bodies).toHaveLength(1);
+    expect(frame.objects).toEqual([]);
+  });
+
+  test('trails() gains one sampled point per tick stepped, for a launched object', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand());
+
+    app.step(5);
+
+    const trails = app.trails();
+    expect(trails.get(0)).toHaveLength(5);
+  });
+
+  test('loadLevel resets trails() so a previous run leaves nothing behind', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand());
+    app.step(5);
+    expect(app.trails().get(0)).toHaveLength(5);
+
+    app.loadLevel('L01-intercept');
+
+    expect(app.trails().size).toBe(0);
+  });
+});
+
+describe('createApp: AppChange.justLoaded', () => {
+  test('is true for load() and loadLevel(), including a failed loadLevel', () => {
+    const { changes, onChange } = recorder();
+    const app = createApp({ onChange });
+
+    app.load({ scenario: scenario(), seed: 1 });
+    expect(changes.at(-1)!.justLoaded).toBe(true);
+
+    app.loadLevel('L01-intercept');
+    expect(changes.at(-1)!.justLoaded).toBe(true);
+
+    app.loadLevel('nope');
+    expect(changes.at(-1)!.justLoaded).toBe(true);
+  });
+
+  test('is false for step() and setWarp(), which must never move the camera on their own', () => {
+    const { changes, onChange } = recorder();
+    const app = createApp({ onChange });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    app.step(1);
+    expect(changes.at(-1)!.justLoaded).toBe(false);
+
+    app.setWarp(2);
+    expect(changes.at(-1)!.justLoaded).toBe(false);
   });
 });
