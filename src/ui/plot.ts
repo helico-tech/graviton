@@ -14,11 +14,15 @@ import {
 } from '../render/camera.ts';
 import type { View } from '../render/camera.ts';
 import { hashCanvasPixels, renderPlot } from '../render/plot.ts';
+import type { PlotSelection } from '../render/plot.ts';
 import type { Frame } from '../render/frame.ts';
 import type { Ctx2D } from '../render/ctx2d.ts';
 
 const GROUND = '#05070a';
 const ZOOM_SENSITIVITY = 0.001; // ~10% per wheel notch (deltaY ~= 100)
+// A pointerdown/pointerup pair moving less than this many CSS pixels reads as a click-to-select
+// rather than the start of a drag-to-pan (GRV-0023 acceptance).
+const CLICK_MOVEMENT_THRESHOLD_PX = 3;
 
 export interface PlotRefs {
   element: HTMLElement;
@@ -148,7 +152,7 @@ export interface PlotController {
   /** Drops the current view so the next `render()` recomputes the level's default framing --
    *  main.ts calls this whenever a fresh level or scenario loads. */
   resetView(): void;
-  /** Wires wheel-to-zoom (about the cursor) and drag-to-pan to the canvas. */
+  /** Wires wheel-to-zoom (about the cursor), drag-to-pan and click-to-select to the canvas. */
   attachInput(): void;
 }
 
@@ -156,10 +160,19 @@ export function createPlotController({
   refs,
   getFrame,
   getTrails,
+  getSelection,
+  onSelect,
 }: {
   refs: PlotRefs;
   getFrame: () => Frame;
   getTrails: () => ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** The app's current selection (src/app/selection.ts), read fresh on every render -- the
+   *  controller only ever draws the ring, it never picks or owns the selection itself. */
+  getSelection?: () => PlotSelection | null;
+  /** Canvas-local, DPR-scaled screen coordinates of a click that wasn't a drag; `main.ts` turns
+   *  this into a `pickAt` call plus `app.select(...)`, keeping `pickAt` itself out of `src/ui`
+   *  (src/app depends on src/ui, never the reverse). */
+  onSelect?: (args: { screenX: number; screenY: number }) => void;
 }): PlotController {
   let view: View | null = null;
   let sizeOverride: { width: number; height: number } | null = null;
@@ -215,6 +228,7 @@ export function createPlotController({
       trails: getTrails(),
       canvasWidth: refs.canvas.width,
       canvasHeight: refs.canvas.height,
+      selection: getSelection?.() ?? null,
     });
     updateReadouts(activeView);
   }
@@ -265,10 +279,12 @@ export function createPlotController({
     );
 
     let dragFrom: { x: number; y: number } | null = null;
+    let pointerDownAt: { x: number; y: number } | null = null;
     refs.canvas.addEventListener('pointerdown', (event) => {
       if (!view) return;
       refs.canvas.setPointerCapture(event.pointerId);
       dragFrom = { x: event.clientX, y: event.clientY };
+      pointerDownAt = { x: event.clientX, y: event.clientY };
     });
     refs.canvas.addEventListener('pointermove', (event) => {
       if (!view || !dragFrom) return;
@@ -279,11 +295,25 @@ export function createPlotController({
       view = pan({ view, dxPixels, dyPixels });
       render();
     });
-    const endDrag = (): void => {
+    refs.canvas.addEventListener('pointerup', (event) => {
+      if (onSelect && pointerDownAt) {
+        const moved = Math.hypot(event.clientX - pointerDownAt.x, event.clientY - pointerDownAt.y);
+        if (moved < CLICK_MOVEMENT_THRESHOLD_PX) {
+          const dpr = window.devicePixelRatio || 1;
+          const rect = refs.canvas.getBoundingClientRect();
+          onSelect({
+            screenX: (event.clientX - rect.left) * dpr,
+            screenY: (event.clientY - rect.top) * dpr,
+          });
+        }
+      }
       dragFrom = null;
-    };
-    refs.canvas.addEventListener('pointerup', endDrag);
-    refs.canvas.addEventListener('pointercancel', endDrag);
+      pointerDownAt = null;
+    });
+    refs.canvas.addEventListener('pointercancel', () => {
+      dragFrom = null;
+      pointerDownAt = null;
+    });
   }
 
   return { render, frameHash, getView, setView, setCanvasSize, resetView, attachInput };

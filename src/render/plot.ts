@@ -5,7 +5,13 @@
 // tests/render/*.test.ts).
 import { formatMetres, pickScaleBar, worldToScreen } from './camera.ts';
 import type { View } from './camera.ts';
-import { drawBody, drawMarker, drawOrbit } from './bodies.ts';
+import {
+  bodyScreenRadius,
+  drawBody,
+  drawMarker,
+  drawOrbit,
+  GLYPH_SCREEN_RADIUS,
+} from './bodies.ts';
 import {
   CONFIRMED_GOOD,
   GRID_MAJOR,
@@ -17,6 +23,7 @@ import {
   MARKER_SHAPES,
   MONO_FONT_FAMILY,
   TEXT_SECONDARY,
+  UNVERIFIED,
   UNVERIFIED_DIM,
 } from './palette.ts';
 import type { Frame, FrameContact, FrameObject, FrameRail } from './frame.ts';
@@ -26,6 +33,15 @@ import { createHash, digest, updateWord } from '../sim/state/hash.ts';
 const RAIL_TICK_LENGTH_PX = 8;
 const CONTACT_MARKER_RADIUS_PX = 4;
 const PROBE_MARKER_RADIUS_PX = 5;
+const SELECTION_RING_MARGIN_PX = 4;
+
+/** Mirrors src/app/selection.ts's `Selection` shape structurally, exactly as `FrameLevelNames`
+ *  (frame.ts) mirrors `CompiledLevel`'s -- so `src/render` depends on neither `src/app` nor
+ *  `src/ui` (research §A.7's separation). */
+export interface PlotSelection {
+  readonly kind: 'body' | 'rail' | 'contact' | 'probe';
+  readonly index: number;
+}
 // Exported so tests/render/plot.test.ts can locate the scale bar's drawn pixels exactly, rather
 // than re-deriving these layout constants.
 export const SCALE_BAR_MARGIN_PX = 16;
@@ -263,6 +279,98 @@ export interface RenderPlotArgs {
   trails: ReadonlyMap<number, readonly { x: number; y: number }[]>;
   canvasWidth: number;
   canvasHeight: number;
+  /** The app's own selection state (src/app/selection.ts), read-only -- the renderer only draws
+   *  the ring, it never picks or owns the selection itself (GRV-0023 acceptance). `null`/`undefined`
+   *  draws nothing. */
+  selection?: PlotSelection | null;
+}
+
+interface SelectionRingGeometry {
+  readonly x: number;
+  readonly y: number;
+  readonly screenRadius: number;
+  readonly color: string;
+}
+
+/** The world position and screen radius to ring for a selection, plus its colour: ice blue for
+ *  everything known, amber for an uncleared contact (GAME-0002 §1, GRV-0023 acceptance). `null`
+ *  for an index the current frame doesn't have (e.g. a probe not yet launched) -- nothing to ring
+ *  yet, not an error. */
+function selectionRingGeometry({
+  selection,
+  frame,
+  view,
+}: {
+  selection: PlotSelection;
+  frame: Frame;
+  view: View;
+}): SelectionRingGeometry | null {
+  switch (selection.kind) {
+    case 'body': {
+      const body = frame.bodies[selection.index];
+      if (!body) return null;
+      const screenRadius = Math.max(bodyScreenRadius(body, view), GLYPH_SCREEN_RADIUS);
+      return {
+        x: body.x,
+        y: body.y,
+        screenRadius: screenRadius + SELECTION_RING_MARGIN_PX,
+        color: KNOWN,
+      };
+    }
+    case 'rail': {
+      const rail = frame.rails[selection.index];
+      if (!rail) return null;
+      return { x: rail.x, y: rail.y, screenRadius: RAIL_TICK_LENGTH_PX, color: KNOWN };
+    }
+    case 'contact': {
+      const contact = frame.contacts[selection.index];
+      if (!contact) return null;
+      return {
+        x: contact.x,
+        y: contact.y,
+        screenRadius: CONTACT_MARKER_RADIUS_PX + SELECTION_RING_MARGIN_PX,
+        color: contact.cleared ? KNOWN : UNVERIFIED,
+      };
+    }
+    case 'probe': {
+      const object = frame.objects[selection.index];
+      if (!object) return null;
+      return {
+        x: object.x,
+        y: object.y,
+        screenRadius: PROBE_MARKER_RADIUS_PX + SELECTION_RING_MARGIN_PX,
+        color: KNOWN,
+      };
+    }
+  }
+}
+
+function drawSelectionRing(
+  ctx: Ctx2D,
+  {
+    selection,
+    frame,
+    view,
+    canvasWidth,
+    canvasHeight,
+  }: {
+    selection: PlotSelection | null | undefined;
+    frame: Frame;
+    view: View;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
+): void {
+  if (!selection) return;
+  const geometry = selectionRingGeometry({ selection, frame, view });
+  if (!geometry) return;
+  const p = worldToScreen({ view, canvasWidth, canvasHeight, x: geometry.x, y: geometry.y });
+  ctx.beginPath();
+  ctx.setLineDash([]);
+  ctx.arc(p.x, p.y, geometry.screenRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = geometry.color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }
 
 /** Draws one complete frame of the plot: ground, grid, orbits, bodies, rails, contacts, flown
@@ -275,6 +383,7 @@ export function renderPlot({
   trails,
   canvasWidth,
   canvasHeight,
+  selection,
 }: RenderPlotArgs): void {
   clearGround(ctx, canvasWidth, canvasHeight);
 
@@ -303,6 +412,7 @@ export function renderPlot({
     drawTrail(ctx, { points, color: object.expended ? KNOWN_DIM : KNOWN });
   });
   for (const object of frame.objects) drawProbe(ctx, { object, view, canvasWidth, canvasHeight });
+  drawSelectionRing(ctx, { selection, frame, view, canvasWidth, canvasHeight });
 
   drawScaleBar(ctx, { pixels: scaleBar.pixels, label: scaleBar.label, canvasWidth, canvasHeight });
   drawZoomReadout(ctx, {

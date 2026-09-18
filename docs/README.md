@@ -55,7 +55,8 @@ that clears a level's fixed contacts (docs/work/GRV-0018-level-solver.md); `--wr
 `pnpm levels:verify [--check]` replays every level with a committed solution and writes its
 evidence (ADR-0006 §5); `--check` is part of `pnpm check`. A campaign level with no solution fails
 `levels:verify`; a fixture is only reported -- `pnpm check` therefore proves every campaign level
-solvable.
+solvable. In the page itself, `?solution=1` (or debug `loadSolution()`) applies the loaded level's
+committed solution log, so it replays exactly as recorded (GRV-0023).
 
 ## Proving a change
 

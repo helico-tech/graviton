@@ -18,6 +18,16 @@ export interface ScreenshotFlags {
   width: number;
   height: number;
   debug: boolean;
+  /** Reproduce a specific in-page moment (GRV-0023, ADR-0004 §1's reproducible-shot URL params):
+   *  each sets the same-named `?param=` main.ts already reads, so a hero frame is one `pnpm
+   *  screenshot` call rather than a hand-built URL. `solution` implies `debug` (the page has no
+   *  other way to load one). */
+  solution: boolean;
+  tick?: string;
+  zoom?: string;
+  cx?: string;
+  cy?: string;
+  select?: string;
 }
 
 function positiveInt(flags: Record<string, string>, key: 'w' | 'h', fallback: number): number {
@@ -37,7 +47,13 @@ export function parseScreenshotFlags(argv: string[]): ScreenshotFlags {
     expectBuild: flags['expect-build'],
     width: positiveInt(flags, 'w', 1280),
     height: positiveInt(flags, 'h', 720),
-    debug: flags.debug === 'true',
+    debug: flags.debug === 'true' || flags.solution === 'true',
+    solution: flags.solution === 'true',
+    tick: flags.tick,
+    zoom: flags.zoom,
+    cx: flags.cx,
+    cy: flags.cy,
+    select: flags.select,
   };
 }
 
@@ -79,6 +95,12 @@ async function main(argv: string[]): Promise<number> {
   try {
     const target = new URL(flags.url ?? server!.url);
     if (flags.debug) target.searchParams.set('debug', '1');
+    if (flags.solution) target.searchParams.set('solution', '1');
+    if (flags.tick !== undefined) target.searchParams.set('tick', flags.tick);
+    if (flags.zoom !== undefined) target.searchParams.set('zoom', flags.zoom);
+    if (flags.cx !== undefined) target.searchParams.set('cx', flags.cx);
+    if (flags.cy !== undefined) target.searchParams.set('cy', flags.cy);
+    if (flags.select !== undefined) target.searchParams.set('select', flags.select);
 
     const context = await browser.newContext({
       viewport: { width: flags.width, height: flags.height },
