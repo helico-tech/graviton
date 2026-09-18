@@ -1,8 +1,9 @@
 ---
-status: open
+status: resolved
 priority: P0
 filed: 2026-09-18
 filed-by: agent
+work: GRV-0019
 ---
 # pages workflow's test step times out under CPU contention on the runner
 
@@ -15,3 +16,5 @@ while the solver tests saturated the two-vCPU runner in other workers. Same clas
 assumes an idle machine.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0019, commit f27f4a3. One assertion over a counter; global testTimeout 20 s.
