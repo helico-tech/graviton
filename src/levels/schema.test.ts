@@ -110,6 +110,51 @@ describe('LevelSourceSchema', () => {
   });
 });
 
+describe('probe bounds (docs/issues/2026-09-18-probe-count-unbounded.md)', () => {
+  const probe = {
+    id: 'a',
+    name: 'A',
+    count: 1,
+    dryMass: '1 kg',
+    propellantMass: '1 kg',
+    exhaustVelocity: '1 km/s',
+    maxThrust: '1 kN',
+    nodeBudget: 1,
+  };
+
+  test('accepts count at the boundary (64) and nodeBudget at the boundary (16)', () => {
+    const result = v.safeParse(LevelSourceSchema, {
+      ...MINIMAL,
+      probes: [{ ...probe, count: 64, nodeBudget: 16 }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test('rejects count above 64', () => {
+    const result = v.safeParse(LevelSourceSchema, {
+      ...MINIMAL,
+      probes: [{ ...probe, count: 65 }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects the demonstrated count: 1000000000', () => {
+    const result = v.safeParse(LevelSourceSchema, {
+      ...MINIMAL,
+      probes: [{ ...probe, count: 1000000000 }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  test('rejects nodeBudget above 16', () => {
+    const result = v.safeParse(LevelSourceSchema, {
+      ...MINIMAL,
+      probes: [{ ...probe, nodeBudget: 17 }],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('generateLevelJsonSchema', () => {
   test('is a draft-07 object schema with unit fields as anyOf[number, string]', () => {
     const schema = generateLevelJsonSchema();

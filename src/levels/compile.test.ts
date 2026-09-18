@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'vitest';
 import { canonicalJson, compileLevel } from './compile.ts';
 import type { CompiledLevel } from './compile.ts';
+import { createSim } from '../sim/sim.ts';
 
 const VALID_YAML = `schema: 1
 id: T00-fixture
@@ -341,6 +342,89 @@ describe('compileLevel: warnings', () => {
     const result = compile(slow);
     if ('issues' in result) throw new Error('expected success with a warning');
     expect(result.warnings.some((w) => w.message.includes('worst-case'))).toBe(true);
+  });
+});
+
+describe('compileLevel: angle normalisation (docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md)', () => {
+  const TWO_PI = 6.283185307179586;
+
+  test.each([0, 0.1, Math.PI, TWO_PI - 1e-9, 6.283185307179585])(
+    'an in-range axialPhaseAtEpoch (%p rad) round-trips bit-identical (Object.is)',
+    (value) => {
+      const yaml = VALID_YAML.replace('axialPhaseAtEpoch: 0 deg', `axialPhaseAtEpoch: ${value}`);
+      const level = expectLevel(compile(yaml));
+      expect(Object.is(level.scenario.bodies[0]!.axialPhaseAtEpoch, value)).toBe(true);
+    },
+  );
+
+  test('an out-of-range axialPhaseAtEpoch (the demonstrated 100000000 deg) is normalised into [0, 2pi)', () => {
+    const bad = VALID_YAML.replace('axialPhaseAtEpoch: 0 deg', 'axialPhaseAtEpoch: 100000000 deg');
+    const level = expectLevel(compile(bad));
+    const phase = level.scenario.bodies[0]!.axialPhaseAtEpoch;
+    expect(phase).toBeGreaterThanOrEqual(0);
+    expect(phase).toBeLessThan(TWO_PI);
+    // createSim/advance must no longer throw the trig kernel's |x| <= 2^18 RangeError on tick 0.
+    expect(() => createSim({ scenario: level.scenario, seed: 1 })).not.toThrow();
+  });
+
+  test('an out-of-range rail longitude is normalised into [0, 2pi)', () => {
+    const bad = VALID_YAML.replace(
+      'longitude: 0 deg\n    muzzleSpeed',
+      'longitude: -370 deg\n    muzzleSpeed',
+    );
+    const level = expectLevel(compile(bad));
+    const longitude = level.scenario.rails[0]!.longitude;
+    expect(longitude).toBeGreaterThanOrEqual(0);
+    expect(longitude).toBeLessThan(TWO_PI);
+  });
+
+  test('an out-of-range contact longitude is normalised into [0, 2pi)', () => {
+    const bad = VALID_YAML.replace(
+      'longitude: 0 deg\n    captureRadius',
+      'longitude: 730 deg\n    captureRadius',
+    );
+    const level = expectLevel(compile(bad));
+    const longitude = level.scenario.contacts[0]!.longitude;
+    expect(longitude).toBeGreaterThanOrEqual(0);
+    expect(longitude).toBeLessThan(TWO_PI);
+  });
+
+  test('an out-of-range argPeriapsis is normalised into [0, 2pi)', () => {
+    const bad = VALID_YAML.replace('argPeriapsis: 0 deg', 'argPeriapsis: -10 deg');
+    const level = expectLevel(compile(bad));
+    const planet = level.scenario.bodies[1]!;
+    if (!('a' in planet)) throw new Error('expected the orbiting body');
+    expect(planet.argPeriapsis).toBeGreaterThanOrEqual(0);
+    expect(planet.argPeriapsis).toBeLessThan(TWO_PI);
+  });
+
+  test('an out-of-range meanAnomalyAtEpoch is normalised into [0, 2pi)', () => {
+    const bad = VALID_YAML.replace('meanAnomalyAtEpoch: 0 deg', 'meanAnomalyAtEpoch: 400 deg');
+    const level = expectLevel(compile(bad));
+    const planet = level.scenario.bodies[1]!;
+    if (!('a' in planet)) throw new Error('expected the orbiting body');
+    expect(planet.meanAnomaly0).toBeGreaterThanOrEqual(0);
+    expect(planet.meanAnomaly0).toBeLessThan(TWO_PI);
+  });
+});
+
+describe('compileLevel: reloadTicks bound (docs/issues/2026-09-18-reload-ticks-wrap-int32.md)', () => {
+  test('the demonstrated huge reloadTime is a positioned issue, not a silent wrap', () => {
+    const bad = VALID_YAML.replace('reloadTime: 6 h', 'reloadTime: 100000000000 h'); // -> 1.2e13 ticks at dt=30s
+    const issues = expectIssues(compile(bad));
+    const issue = issues.find((i) => i.path === 'rails[0].reloadTime');
+    expect(issue).toBeDefined();
+    expect(issue!.severity).toBe('error');
+    expect(issue!.message).toContain('Int32');
+    expect(issue!.line).toBe(37); // the "reloadTime: ..." line, not the whole-document fallback
+  });
+});
+
+describe('compileLevel: probe count bound (docs/issues/2026-09-18-probe-count-unbounded.md)', () => {
+  test('the demonstrated count: 1000000000 is a schema issue at probes[0].count', () => {
+    const bad = VALID_YAML.replace('count: 3', 'count: 1000000000');
+    const issues = expectIssues(compile(bad));
+    expect(issues.some((i) => i.path === 'probes[0].count')).toBe(true);
   });
 });
 

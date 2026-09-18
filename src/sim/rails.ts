@@ -9,6 +9,10 @@ import { surfacePhase } from './ephemeris/bodies.ts';
 import type { BodyTable, EphemerisOut } from './ephemeris/bodies.ts';
 
 const PI = 3.141592653589793;
+const TWO_PI = 6.283185307179586;
+// Int32Array storage limit for RailTable.reloadTicks (docs/issues/2026-09-18-reload-ticks-wrap-
+// int32.md): above this a reload gate silently wraps negative and never blocks a relaunch.
+const MAX_RELOAD_TICKS = 0x7fffffff;
 
 export interface RailDef {
   /** Host body index (BodyTable order). */
@@ -62,8 +66,10 @@ export function createRailTable(defs: RailDef[], bodies: BodyTable): RailTable {
     const def = defs[i]!;
     if (!Number.isInteger(def.host) || def.host < 0 || def.host >= bodies.count)
       throw new Error(`createRailTable: rail ${i} has out-of-range host (${def.host})`);
-    if (!Number.isFinite(def.longitude))
-      throw new Error(`createRailTable: rail ${i} has non-finite longitude (${def.longitude})`);
+    if (!Number.isFinite(def.longitude) || Math.abs(def.longitude) > TWO_PI)
+      throw new Error(
+        `createRailTable: rail ${i} has longitude (${def.longitude}) outside [-2pi, 2pi]`,
+      );
     if (!Number.isFinite(def.muzzleSpeedMin) || def.muzzleSpeedMin <= 0)
       throw new Error(
         `createRailTable: rail ${i} has non-positive or non-finite muzzleSpeedMin (${def.muzzleSpeedMin})`,
@@ -76,9 +82,13 @@ export function createRailTable(defs: RailDef[], bodies: BodyTable): RailTable {
       throw new Error(
         `createRailTable: rail ${i} has headingCone (${def.headingCone}) outside (0, pi]`,
       );
-    if (!Number.isInteger(def.reloadTicks) || def.reloadTicks < 0)
+    if (
+      !Number.isInteger(def.reloadTicks) ||
+      def.reloadTicks < 0 ||
+      def.reloadTicks > MAX_RELOAD_TICKS
+    )
       throw new Error(
-        `createRailTable: rail ${i} has non-integer or negative reloadTicks (${def.reloadTicks})`,
+        `createRailTable: rail ${i} has reloadTicks (${def.reloadTicks}) outside [0, ${MAX_RELOAD_TICKS}] (Int32 range)`,
       );
 
     table.host[i] = def.host;
@@ -103,11 +113,6 @@ export interface SurfacePoint {
   ux: number;
   uy: number;
 }
-
-/** A rail's muzzle geometry is exactly a host surface point -- kept as its
- *  own name since `RailGeometry` is the public shape callers (commands.ts)
- *  already destructure against. */
-export type RailGeometry = SurfacePoint;
 
 /** Position and host-plus-rotation velocity of a point at longitude
  *  `longitude` on `host`'s equator at time `t` (GAME-0001 §4.2): exactly on
@@ -160,7 +165,7 @@ export function railGeometry({
   rail: number;
   t: number;
   eph: EphemerisOut;
-}): RailGeometry {
+}): SurfacePoint {
   return surfacePoint({
     bodies,
     host: rails.host[rail]!,

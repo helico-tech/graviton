@@ -65,6 +65,12 @@ describe('createRailTable validation', () => {
     ['host', 1.5],
     ['longitude', NaN],
     ['longitude', Infinity],
+    // docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md: the compiler normalises
+    // source angles to [0, 2pi), but createRailTable bounds them again at load, independent of
+    // the compiler -- [-2pi, 2pi] is the accepted range (both endpoints included).
+    ['longitude', 2 * Math.PI + 1e-9],
+    ['longitude', -2 * Math.PI - 1e-9],
+    ['longitude', 100000000 * (Math.PI / 180)], // the demonstrated 100000000 deg, in rad
     ['muzzleSpeedMin', 0],
     ['muzzleSpeedMin', -1],
     ['muzzleSpeedMin', NaN],
@@ -76,8 +82,22 @@ describe('createRailTable validation', () => {
     ['reloadTicks', -1],
     ['reloadTicks', 1.5],
     ['reloadTicks', NaN],
+    // docs/issues/2026-09-18-reload-ticks-wrap-int32.md: 12000000000000 is exactly what a
+    // `reloadTime: 100000000000 h` compiles to at dt=30 s -- it must be rejected here rather than
+    // wrapping negative in the Int32Array column.
+    ['reloadTicks', 0x7fffffff + 1],
+    ['reloadTicks', 12000000000000],
   ])('throws when a rail has %s = %p', (field, value) => {
     expect(() => createRailTable([{ ...rail, [field]: value }], bodies)).toThrow();
+  });
+
+  test('accepts reloadTicks at the Int32 boundary (0x7fffffff)', () => {
+    expect(() => createRailTable([{ ...rail, reloadTicks: 0x7fffffff }], bodies)).not.toThrow();
+  });
+
+  test('accepts longitude at the +-2pi boundary', () => {
+    expect(() => createRailTable([{ ...rail, longitude: 2 * Math.PI }], bodies)).not.toThrow();
+    expect(() => createRailTable([{ ...rail, longitude: -2 * Math.PI }], bodies)).not.toThrow();
   });
 
   test('throws when muzzleSpeedMax is below muzzleSpeedMin', () => {

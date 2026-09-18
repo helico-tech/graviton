@@ -25,6 +25,11 @@ import { SIM_VERSION } from './version.ts';
 // directly.
 export type { BodyDef, RailDef, FixedContactDef };
 
+// A level-load sanity limit against typos (docs/issues/2026-09-18-probe-count-unbounded.md):
+// `count: 1000000000` should fail loudly here, not allocate gigabytes. Debris caps later come
+// with their own budget, not this one.
+const MAX_SCENARIO_ALLOCATION = 4096;
+
 export interface ProbeDef {
   dryMass: number;
   propellantMass: number;
@@ -103,13 +108,21 @@ export interface Sim {
 function validateScenario(scenario: Scenario): void {
   if (!Number.isFinite(scenario.dt) || scenario.dt <= 0)
     throw new Error(`validateScenario: non-positive or non-finite dt (${scenario.dt})`);
-  if (!Number.isInteger(scenario.capacity) || scenario.capacity <= 0)
+  if (
+    !Number.isInteger(scenario.capacity) ||
+    scenario.capacity <= 0 ||
+    scenario.capacity > MAX_SCENARIO_ALLOCATION
+  )
     throw new Error(
-      `validateScenario: non-integer or non-positive capacity (${scenario.capacity})`,
+      `validateScenario: capacity must be an integer in (0, ${MAX_SCENARIO_ALLOCATION}] (${scenario.capacity})`,
     );
-  if (!Number.isInteger(scenario.burnNodeCapacity) || scenario.burnNodeCapacity < 0)
+  if (
+    !Number.isInteger(scenario.burnNodeCapacity) ||
+    scenario.burnNodeCapacity < 0 ||
+    scenario.burnNodeCapacity > MAX_SCENARIO_ALLOCATION
+  )
     throw new Error(
-      `validateScenario: non-integer or negative burnNodeCapacity (${scenario.burnNodeCapacity})`,
+      `validateScenario: burnNodeCapacity must be an integer in [0, ${MAX_SCENARIO_ALLOCATION}] (${scenario.burnNodeCapacity})`,
     );
 
   const probe = scenario.probe;
@@ -274,9 +287,9 @@ export function advance({ sim, log, ticks }: AdvanceArgs): void {
 
 /** Hex digest over tick, seed, count, every live object array prefix
  *  (including hitBody/burning as words), pending nodes, rail last-launch
- *  ticks, rail last-launch ticks, and stream words -- and, per contact
- *  (GRV-0015), cleared/impactTick/impactSpeed/impactEnergy. Derived
- *  scratch, bodies, rails and contacts (the static tables) are excluded. */
+ *  ticks, and stream words -- and, per contact (GRV-0015), cleared/
+ *  impactTick/impactSpeed/impactEnergy. Derived scratch, bodies, rails and
+ *  contacts (the static tables) are excluded. */
 export function hashSim(sim: Sim): string {
   const state = createHash();
   updateWord(state, sim.tick);

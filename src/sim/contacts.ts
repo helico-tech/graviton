@@ -22,6 +22,8 @@ import type { BodyTable, EphemerisOut } from './ephemeris/bodies.ts';
  *  rails.ts's NEVER_LAUNCHED. */
 export const NO_IMPACT = -1;
 
+const TWO_PI = 6.283185307179586;
+
 export interface FixedContactDef {
   /** Host body index (BodyTable order). */
   host: number;
@@ -57,9 +59,9 @@ export function createContactTable(defs: FixedContactDef[], bodies: BodyTable): 
     const def = defs[i]!;
     if (!Number.isInteger(def.host) || def.host < 0 || def.host >= bodies.count)
       throw new Error(`createContactTable: contact ${i} has out-of-range host (${def.host})`);
-    if (!Number.isFinite(def.longitude))
+    if (!Number.isFinite(def.longitude) || Math.abs(def.longitude) > TWO_PI)
       throw new Error(
-        `createContactTable: contact ${i} has non-finite longitude (${def.longitude})`,
+        `createContactTable: contact ${i} has longitude (${def.longitude}) outside [-2pi, 2pi]`,
       );
     if (!Number.isFinite(def.captureRadius) || def.captureRadius <= 0)
       throw new Error(

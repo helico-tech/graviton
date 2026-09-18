@@ -14,6 +14,22 @@ import type { BodyDef, FixedContactDef, RailDef, Scenario } from '../sim/sim.ts'
 const G = 6.6743e-11; // CODATA gravitational constant; mu = G * mass (ADR-0006 §2), stated once
 const TRANSFER_WINDOW_SECONDS = 40 * 86400; // ADR-0006 §6's muzzle-band warning window
 const WIDE_CONE_DEG = 80; // docs/issues/2026-09-17-shallow-launch-can-self-collide.md
+const TWO_PI = 6.283185307179586;
+// Int32Array storage limit for RailTable.reloadTicks, mirrored from rails.ts's own createRailTable
+// check (docs/issues/2026-09-18-reload-ticks-wrap-int32.md): caught here too so the compiler
+// reports it at the offending field instead of falling through to createSim's whole-document
+// fallback.
+const MAX_RELOAD_TICKS = 0x7fffffff;
+
+/** `x - 2*pi*floor(x/2pi)`, reducing any finite angle into `[0, 2pi)`
+ *  (docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md): every source angle
+ *  (axialPhaseAtEpoch, longitude, argPeriapsis, meanAnomalyAtEpoch) passes through this once here,
+ *  so nothing unreduced reaches the trig kernel's own bounds check (createBodyTable/
+ *  createRailTable/createContactTable) or, further downstream, its domain limit. An already
+ *  in-range value comes back bit-identical: `floor(x/2pi)` is 0, so the subtraction is `x - 0`. */
+function normalizeAngle(x: number): number {
+  return x - TWO_PI * Math.floor(x / TWO_PI);
+}
 
 export interface Issue {
   severity: 'error' | 'warning';
@@ -234,7 +250,7 @@ function resolveIds(
         mu,
         radius: body.radius,
         rotationPeriod: body.rotationPeriod,
-        axialPhaseAtEpoch: body.axialPhaseAtEpoch,
+        axialPhaseAtEpoch: normalizeAngle(body.axialPhaseAtEpoch),
       });
       return;
     }
@@ -272,10 +288,10 @@ function resolveIds(
       radius: body.radius,
       a: body.orbit.a,
       e: body.orbit.e,
-      argPeriapsis: body.orbit.argPeriapsis,
-      meanAnomaly0: body.orbit.meanAnomalyAtEpoch,
+      argPeriapsis: normalizeAngle(body.orbit.argPeriapsis),
+      meanAnomaly0: normalizeAngle(body.orbit.meanAnomalyAtEpoch),
       rotationPeriod: body.rotationPeriod,
-      axialPhaseAtEpoch: body.axialPhaseAtEpoch,
+      axialPhaseAtEpoch: normalizeAngle(body.axialPhaseAtEpoch),
     });
   });
 
@@ -307,9 +323,19 @@ function resolveIds(
       );
       return;
     }
+    if (reloadTicks > MAX_RELOAD_TICKS) {
+      issues.push(
+        errorAt(
+          positions,
+          ['rails', i, 'reloadTime'],
+          `reloadTime (${rail.reloadTime} s) is ${reloadTicks} ticks at dt=${source.dt} s, which exceeds the Int32 limit (${MAX_RELOAD_TICKS})`,
+        ),
+      );
+      return;
+    }
     railDefs.push({
       host: bodyIndex.get(rail.host)!,
-      longitude: rail.longitude,
+      longitude: normalizeAngle(rail.longitude),
       muzzleSpeedMin: rail.muzzleSpeed.min,
       muzzleSpeedMax: rail.muzzleSpeed.max,
       headingCone: rail.headingCone,
@@ -339,7 +365,7 @@ function resolveIds(
     }
     contactDefs.push({
       host: bodyIndex.get(contact.host)!,
-      longitude: contact.longitude,
+      longitude: normalizeAngle(contact.longitude),
       captureRadius: contact.captureRadius,
       minimumImpactEnergy: contact.clearedBy.minimumImpactEnergy,
     });
