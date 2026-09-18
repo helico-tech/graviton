@@ -1,6 +1,6 @@
 ---
 id: EPIC-06
-status: in-progress
+status: done
 ---
 # EPIC-06 Planner
 
