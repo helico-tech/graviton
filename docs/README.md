@@ -42,6 +42,13 @@ plain `node` (Node 24 strips types). Work item IDs are `GRV-NNNN`; epics are
 and regenerates `levels/schema/level.schema.json` (ADR-0006, docs/work/GRV-0016-level-compiler.md);
 `--check` writes nothing and fails on stale output or a level with issues, and is part of `pnpm check`.
 
+`pnpm levels:verify [--check]` replays every level with a committed `<id>.solution.json` and
+writes `<id>.evidence.json` (ADR-0006 §5, docs/work/GRV-0017-level-verifier-and-evidence.md);
+`--check` is part of `pnpm check`. `pnpm levels:solve <id> [--write] [--window <ticks>]
+[--max-flight <ticks>] [--budget <evals>]` searches for a command log that clears a level's fixed
+contacts (docs/work/GRV-0018-level-solver.md); `--write` commits `<id>.solution.json` and
+regenerates its evidence through the same path `levels:verify` uses.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;

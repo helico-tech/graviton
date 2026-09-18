@@ -26,7 +26,8 @@
     "e2e": "pnpm build && playwright test",
     "screenshot": "node scripts/screenshot.ts",
     "levels:build": "node scripts/levels-build.ts",
-    "levels:verify": "node scripts/levels-verify.ts"
+    "levels:verify": "node scripts/levels-verify.ts",
+    "levels:solve": "node scripts/levels-solve.ts"
   },
   "dependencies": {
     "@fontsource/barlow-condensed": "5.3.0",
