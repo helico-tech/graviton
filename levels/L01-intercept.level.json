@@ -1,0 +1,98 @@
+{
+  "bodyClasses": [
+    "star",
+    "rock",
+    "ice"
+  ],
+  "bodyIds": [
+    "corvai",
+    "meskel",
+    "yarune"
+  ],
+  "brief": "Meskel Rail has a single contact in range: a derelict hulk settled on Yarune, a few hours out at cruise speed. Nothing else is moving nearby -- plan the launch, commit it, and clear the hulk before the window closes.",
+  "contactIds": [
+    "drift-hulk"
+  ],
+  "debrief": "The hulk never moved. Everything in the plan was aimed at where Yarune's spin would carry it by the time the probe arrived, not at where it sat when you looked. A launch vector is a promise about where the contact will be, not where it is.",
+  "id": "L01-intercept",
+  "name": "Intercept",
+  "names": {
+    "bodies": [
+      "Corvai",
+      "Meskel",
+      "Yarune"
+    ],
+    "contacts": [
+      "Drift Hulk"
+    ],
+    "rails": [
+      "Meskel Rail"
+    ]
+  },
+  "railIds": [
+    "meskel-rail"
+  ],
+  "scenario": {
+    "bodies": [
+      {
+        "axialPhaseAtEpoch": 0,
+        "mu": 1668574999999999700,
+        "parent": -1,
+        "radius": 75000000,
+        "rotationPeriod": 18000
+      },
+      {
+        "a": 98734594662,
+        "argPeriapsis": 0,
+        "axialPhaseAtEpoch": 0,
+        "e": 0.02,
+        "meanAnomaly0": 0,
+        "mu": 2669719999999.9995,
+        "parent": 0,
+        "radius": 900000,
+        "rotationPeriod": 57600
+      },
+      {
+        "a": 98734594662,
+        "argPeriapsis": 0,
+        "axialPhaseAtEpoch": 0,
+        "e": 0.015,
+        "meanAnomaly0": 0.029670597283903602,
+        "mu": 3337149999999.9995,
+        "parent": 0,
+        "radius": 950000,
+        "rotationPeriod": 64800
+      }
+    ],
+    "burnNodeCapacity": 0,
+    "capacity": 2,
+    "contacts": [
+      {
+        "captureRadius": 35000,
+        "host": 2,
+        "longitude": 0,
+        "minimumImpactEnergy": 5000000000000
+      }
+    ],
+    "dt": 30,
+    "probe": {
+      "dryMass": 420,
+      "exhaustVelocity": 31000,
+      "propellantMass": 680,
+      "thrust": 9400
+    },
+    "rails": [
+      {
+        "headingCone": 1.0471975511965976,
+        "host": 1,
+        "longitude": 0,
+        "muzzleSpeedMax": 280000,
+        "muzzleSpeedMin": 120000,
+        "reloadTicks": 480
+      }
+    ],
+    "streams": []
+  },
+  "schema": 1,
+  "seed": 190119001
+}

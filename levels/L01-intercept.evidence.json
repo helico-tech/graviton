@@ -1,0 +1,39 @@
+{
+  "contacts": [
+    {
+      "cleared": true,
+      "closingSpeed": 120098.8659332821,
+      "id": "drift-hulk",
+      "impactEnergy": 7933055679153.257,
+      "impactTick": 3298,
+      "minimumImpactEnergy": 5000000000000,
+      "timeOfFlightSeconds": 25020
+    }
+  ],
+  "dtConvergence": [
+    {
+      "clearedAtDt": true,
+      "clearedAtHalfDt": true,
+      "closingSpeedAtDt": 120098.8659332821,
+      "closingSpeedAtHalfDt": 120098.8659332821,
+      "id": "drift-hulk",
+      "impactTimeDifferenceSeconds": 0,
+      "impactTimeSecondsAtDt": 98940,
+      "impactTimeSecondsAtHalfDt": 98940
+    }
+  ],
+  "finalStateHash": "0220ac8ab37933b0",
+  "level": "L01-intercept",
+  "levelHash": "sha256:871469a8225489d166411b0c4c03d5cac033970c2923f82150c2c18e3122d406",
+  "outcome": {
+    "contactsCleared": 1,
+    "contactsTotal": 1,
+    "probesGranted": 2,
+    "probesLaunched": 1,
+    "propellantRemaining": [
+      680
+    ]
+  },
+  "simVersion": 3,
+  "solutionHash": "sha256:bcce4f0349607e6f7e350cd192bcf478a271265c3d93cc551dc5b5163c15a98d"
+}
