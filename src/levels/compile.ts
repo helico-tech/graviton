@@ -9,12 +9,18 @@ import * as v from 'valibot';
 import { LevelSourceSchema } from './schema.ts';
 import type { LevelSource } from './schema.ts';
 import { createSim } from '../sim/sim.ts';
-import type { BodyDef, FixedContactDef, RailDef, Scenario } from '../sim/sim.ts';
+import type { BodyDef, FixedContactDef, PostDef, RailDef, Scenario } from '../sim/sim.ts';
 
 const G = 6.6743e-11; // CODATA gravitational constant; mu = G * mass (ADR-0006 §2), stated once
 const TRANSFER_WINDOW_SECONDS = 40 * 86400; // ADR-0006 §6's muzzle-band warning window
 const WIDE_CONE_DEG = 80; // docs/issues/2026-09-17-shallow-launch-can-self-collide.md
 const TWO_PI = 6.283185307179586;
+const C = 299792458; // m/s -- ADR-0007 §7's historyTicks bound.
+// A safety margin on top of the exact light round-trip bound (ADR-0007 §7): enough ticks for the
+// Newton solvers' own geometric starter (research §5.2) and a coarser dt/2 verifier replay
+// (doubleLogTicks halves dt, doubling the tick count for the same physical window) to never run
+// off the end of the retained window by a rounding hair.
+const HISTORY_TICKS_MARGIN = 16;
 // Int32Array storage limit for RailTable.reloadTicks, mirrored from rails.ts's own createRailTable
 // check (docs/issues/2026-09-18-reload-ticks-wrap-int32.md): caught here too so the compiler
 // reports it at the offending field instead of falling through to createSim's whole-document
@@ -223,6 +229,7 @@ function resolveIds(
   bodyIndex: Map<string, number>;
   railDefs: RailDef[];
   contactDefs: FixedContactDef[];
+  post: PostDef | null;
 } {
   const issues: Issue[] = [];
 
@@ -251,6 +258,7 @@ function resolveIds(
         radius: body.radius,
         rotationPeriod: body.rotationPeriod,
         axialPhaseAtEpoch: normalizeAngle(body.axialPhaseAtEpoch),
+        atmosphereMargin: body.atmosphereMargin,
       });
       return;
     }
@@ -292,6 +300,7 @@ function resolveIds(
       meanAnomaly0: normalizeAngle(body.orbit.meanAnomalyAtEpoch),
       rotationPeriod: body.rotationPeriod,
       axialPhaseAtEpoch: normalizeAngle(body.axialPhaseAtEpoch),
+      atmosphereMargin: body.atmosphereMargin,
     });
   });
 
@@ -371,7 +380,37 @@ function resolveIds(
     });
   });
 
-  return { issues, bodyDefs, bodyIndex, railDefs, contactDefs };
+  let post: PostDef | null = null;
+  if (!bodyIndex.has(source.post.host)) {
+    issues.push(errorAt(positions, ['post', 'host'], `unknown body id "${source.post.host}"`));
+  } else {
+    post = {
+      host: bodyIndex.get(source.post.host)!,
+      longitude: normalizeAngle(source.post.longitude),
+    };
+  }
+
+  return { issues, bodyDefs, bodyIndex, railDefs, contactDefs, post };
+}
+
+/** ADR-0007 §7: enough ticks to cover a full light round trip across the whole system, plus
+ *  margin. `maxSeparation` is twice the largest apoapsis distance any body reaches from the system
+ *  primary (`apoapsisBoundFromPrimary`'s own crude closed-form bound) -- the worst case, two
+ *  bodies each at apoapsis on opposite sides of the primary. */
+function computeHistoryTicks({
+  bodyDefs,
+  dt,
+}: {
+  bodyDefs: readonly BodyDef[];
+  dt: number;
+}): number {
+  let maxApoapsis = 0;
+  for (let i = 0; i < bodyDefs.length; i++) {
+    const bound = apoapsisBoundFromPrimary(bodyDefs, i);
+    if (bound > maxApoapsis) maxApoapsis = bound;
+  }
+  const maxSeparation = 2 * maxApoapsis;
+  return Math.ceil((2 * maxSeparation) / C / dt) + HISTORY_TICKS_MARGIN;
 }
 
 function buildScenario({
@@ -379,11 +418,13 @@ function buildScenario({
   bodyDefs,
   railDefs,
   contactDefs,
+  post,
 }: {
   source: LevelSource;
   bodyDefs: BodyDef[];
   railDefs: RailDef[];
   contactDefs: FixedContactDef[];
+  post: PostDef;
 }): Scenario {
   const probeSource = source.probes[0]!;
   return {
@@ -392,6 +433,8 @@ function buildScenario({
     burnNodeCapacity: probeSource.count * probeSource.nodeBudget,
     bodies: bodyDefs,
     rails: railDefs,
+    post,
+    historyTicks: computeHistoryTicks({ bodyDefs, dt: source.dt }),
     probe: {
       dryMass: probeSource.dryMass,
       propellantMass: probeSource.propellantMass,
@@ -429,7 +472,9 @@ function compileSemantics({
 
   if (issues.length > 0) return { issues, warnings: [] };
 
-  const scenario = buildScenario({ source, ...resolved });
+  // resolved.post is only null alongside an issue already pushed above, so this point is
+  // unreachable with a null post -- the assertion just says so to the type checker.
+  const scenario = buildScenario({ source, ...resolved, post: resolved.post! });
 
   try {
     createSim({ scenario, seed: source.seed });

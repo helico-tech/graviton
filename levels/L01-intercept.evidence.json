@@ -22,9 +22,9 @@
       "impactTimeSecondsAtHalfDt": 98940
     }
   ],
-  "finalStateHash": "0220ac8ab37933b0",
+  "finalStateHash": "031fd01d7de201bf",
   "level": "L01-intercept",
-  "levelHash": "sha256:871469a8225489d166411b0c4c03d5cac033970c2923f82150c2c18e3122d406",
+  "levelHash": "sha256:25e012dee2e226a10fb634c9212f458e2a507020f65900f0f32dae9899a7d901",
   "outcome": {
     "contactsCleared": 1,
     "contactsTotal": 1,
@@ -34,6 +34,6 @@
       680
     ]
   },
-  "simVersion": 3,
-  "solutionHash": "sha256:bcce4f0349607e6f7e350cd192bcf478a271265c3d93cc551dc5b5163c15a98d"
+  "simVersion": 4,
+  "solutionHash": "sha256:bdfbfaee30dbd1654698c8907dec80e872759959847b54226b3f6fd53b4d25cb"
 }

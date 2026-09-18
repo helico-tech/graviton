@@ -84,6 +84,9 @@ const BodySchema = v.strictObject({
   rotationPeriod: positiveQuantity('duration'),
   axialPhaseAtEpoch: quantity('angle'),
   orbit: v.optional(OrbitSchema),
+  // GRV-0029, ADR-0007 §4: grazing margin for occlusion only, default 0 (no atmosphere/plasma
+  // buffer) -- optional because most bodies in a level need none.
+  atmosphereMargin: v.optional(nonNegativeQuantity('length')),
 });
 
 const RailSchema = v.strictObject({
@@ -135,6 +138,12 @@ const ContactSchema = v.strictObject({
   clearedBy: v.strictObject({ minimumImpactEnergy: positiveQuantity('energy') }),
 });
 
+// ADR-0007 §1: the clearance post, a surface point like a rail.
+const PostSchema = v.strictObject({
+  host: nonEmpty,
+  longitude: quantity('angle'),
+});
+
 export const LevelSourceSchema = v.strictObject({
   schema: v.literal(1),
   id: nonEmpty,
@@ -153,6 +162,7 @@ export const LevelSourceSchema = v.strictObject({
   rails: v.array(RailSchema),
   probes: v.array(ProbeSchema),
   contacts: v.array(ContactSchema),
+  post: PostSchema,
 });
 
 export type LevelSource = v.InferOutput<typeof LevelSourceSchema>;
@@ -161,6 +171,7 @@ export type OrbitSource = v.InferOutput<typeof OrbitSchema>;
 export type RailSource = v.InferOutput<typeof RailSchema>;
 export type ProbeSource = v.InferOutput<typeof ProbeSchema>;
 export type ContactSource = v.InferOutput<typeof ContactSchema>;
+export type PostSource = v.InferOutput<typeof PostSchema>;
 
 /** JSON Schema for editors (research A.11): generated from the same valibot schema that
  *  validates at build time, so there is one definition and no drift. Unit-suffixed fields

@@ -7,24 +7,28 @@
 // burning per tick plus the events it meets along the way (launch, each node's start/end, closest
 // approach per contact, impact, a body hit).
 //
-// Issuance timing: `planToCommands` (plan.ts) issues every burn command at the plan's launch tick,
-// because that is when a probe's onboard computer is actually loaded (GAME-0001 §4.4) -- the
-// commit path (appending to the permanent log) always uses it. This module's own *internal*
-// trial log instead issues each node's burn command at its own `atTick` ("lazy" issuance). The two
-// are physically equivalent: `activateDueBurnNodes` (sim.ts) only ever cares whether a pending
-// node's `atTick` has arrived and the probe is free, never how long the node sat in the queue
-// first, so the resulting x/y/vx/vy/mass/burning trajectory is bit-identical either way (proven by
-// the ghost invariant test below, which compares against a live sim advanced with the *committed*
-// (all-at-launch) commands). Lazy issuance is what makes the cache possible: with all-at-launch
-// issuance every node is already committed to the sim's pending queue on the very first tick, so a
-// checkpoint taken mid-flight cannot cleanly swap out an edited downstream node -- with lazy
-// issuance, nothing beyond an unfired node exists in the sim yet, so resuming from a checkpoint and
-// issuing a fresh (possibly edited) command for it is exactly what a fresh command log entry does.
+// Issuance timing (ADR-0007 §2): `planToCommands` (plan.ts) issues every burn command bundled with
+// the launch -- the probe does not exist yet at commit time, so a node's own arrival can't be
+// solved, and the whole plan travels as one transmission (commands.ts's "same issue batch"). This
+// module's own *internal* trial log instead issues each node's burn command lazily, at
+// `issueTickFor(probe, node.atTick)` -- the latest tick that still gets it there in time -- once
+// the probe actually exists to solve that light cone against. The two are physically equivalent:
+// `activateDueBurnNodes` (sim.ts) only ever cares whether a pending node's `atTick` has arrived and
+// the probe is free, never how long the node sat in the queue first, so the resulting x/y/vx/vy/
+// mass/burning trajectory is bit-identical either way (proven by the ghost invariant test below,
+// which compares against a live sim advanced with the committed, bundled-issuance commands). Lazy
+// issuance is what makes the cache possible: with bundled issuance every node is already committed
+// to the sim's pending-arrivals queue on the very first tick, so a checkpoint taken mid-flight
+// cannot cleanly swap out an edited downstream node -- with lazy issuance, nothing beyond an
+// unissued node exists in the sim yet, so resuming from a checkpoint (taken right before that
+// node's own issue tick) and issuing a fresh (possibly edited) command for it is exactly what a
+// fresh command log entry does.
 import { advance, createSim, deserializeSim, serializeSim } from '../sim/sim.ts';
 import type { Command, Sim } from '../sim/sim.ts';
 import { evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { contactPoint } from '../sim/contacts.ts';
+import { issueTickFor } from '../sim/lightcone.ts';
 import { sweptSegmentDistance } from '../levels/solve.ts';
 import type { CompiledLevel } from '../levels/compile.ts';
 import type { BurnNode, FlightPlan } from './plan.ts';
@@ -147,35 +151,36 @@ function captureContactOutcomes(sim: Sim): GhostContactOutcome[] {
   return outcomes;
 }
 
-/** Every command the ghost's own integration needs, sorted by tick: the committed `log` first,
- *  the launch, then one burn command per node issued lazily at its own `atTick` (see the module
- *  header). `advance`'s cursor skips anything already behind `sim.tick`, so this same array is
- *  correct whether integration starts cold at `fromTick` or resumes from a mid-flight checkpoint. */
-function buildTrialLog({
+/** The committed `log` plus the plan's own launch, issued at `issueTickFor(rail, launchTick)` (the
+ *  latest tick that still arrives exactly at `launchTick` -- ADR-0007 §2): sorted by tick. Node
+ *  commands are NOT included here -- `runLoop`'s own `maybeIssueNodes` appends each one lazily, at
+ *  the tick it actually needs to go out (module header), which requires the probe to already exist
+ *  in `sim` and so can't be precomputed before integration starts. `advance`'s cursor skips
+ *  anything already behind `sim.tick`, so this same array is correct whether integration starts
+ *  cold at `fromTick` or resumes from a mid-flight checkpoint. Mutated in place by `runLoop` (nodes
+ *  pushed on as they're issued) -- the array identity is never shared with a caller. */
+function buildLaunchLog({
+  sim,
   log,
   plan,
-  probeIndex,
 }: {
+  sim: Sim;
   log: readonly Command[];
   plan: FlightPlan;
-  probeIndex: number;
 }): Command[] {
+  const issueTick = issueTickFor({
+    sim,
+    target: { kind: 'rail', rail: plan.rail },
+    atTick: plan.launchTick,
+  });
   const launch: Command = {
-    tick: plan.launchTick,
+    tick: issueTick,
     kind: 'launch',
     rail: plan.rail,
     heading: plan.heading,
     speed: plan.speed,
   };
-  const burns: Command[] = plan.nodes.map((node) => ({
-    tick: node.atTick,
-    kind: 'burn',
-    probe: probeIndex,
-    atTick: node.atTick,
-    prograde: node.prograde,
-    lateral: node.lateral,
-  }));
-  return [...log, launch, ...burns].sort((a, b) => a.tick - b.tick);
+  return [...log, launch].sort((a, b) => a.tick - b.tick);
 }
 
 function nodesEqual(a: BurnNode, b: BurnNode): boolean {
@@ -257,13 +262,14 @@ interface RunLoopArgs {
   checkpoints: Checkpoint[];
   contactBest: ContactBest[];
   nodeCursor: number;
-  checkpointNodeCursor: number;
+  issueNodeCursor: number;
 }
 
 /** Advances `sim` one tick at a time from `startIndex` (already sampled -- either the fresh base
  *  state or a checkpoint's own instant) to `horizonTick`, writing every further sample and event
- *  and appending a checkpoint each time a still-unfired node's `atTick` is reached. Stops early on
- *  an impact or a body hit (ADR-0005 "Burns": an expended object never moves again). */
+ *  and lazily issuing (and checkpointing before) each not-yet-issued node once its own
+ *  `issueTickFor` tick arrives (module header). Stops early on an impact or a body hit (ADR-0005
+ *  "Burns": an expended object never moves again). */
 function runLoop({
   sim,
   level,
@@ -278,7 +284,7 @@ function runLoop({
   checkpoints,
   contactBest,
   nodeCursor,
-  checkpointNodeCursor,
+  issueNodeCursor,
 }: RunLoopArgs): { ticksIntegrated: number; finalIndex: number } {
   const contactCount = sim.contacts.count;
   const eph = makeEph(sim.bodies.count);
@@ -299,25 +305,40 @@ function runLoop({
   let existedPrev = probeIndex < sim.objects.count;
 
   let nextPairIndex = nodeCursor;
-  let nextCheckpointIndex = checkpointNodeCursor;
+  let nextIssueIndex = issueNodeCursor;
 
-  const maybeCheckpoint = (): void => {
-    const currentTick = fromTick + index;
-    while (
-      nextCheckpointIndex < plan.nodes.length &&
-      plan.nodes[nextCheckpointIndex]!.atTick === currentTick
-    ) {
+  // Issues every node whose latest safe issue tick (issueTickFor) has arrived, checkpointing
+  // `sim`'s state right before each one -- so a later resume with an edited node substitutes a
+  // fresh command for it, exactly as if it had never been issued (module header). Needs the probe
+  // to already exist: before its launch arrives this is a no-op every call.
+  const maybeIssueNodes = (): void => {
+    while (nextIssueIndex < plan.nodes.length && probeIndex < sim.objects.count) {
+      const node = plan.nodes[nextIssueIndex]!;
+      const issueTick = issueTickFor({
+        sim,
+        target: { kind: 'object', object: probeIndex },
+        atTick: node.atTick,
+      });
+      if (issueTick > sim.tick) break;
       checkpoints.push({
-        tick: currentTick,
+        tick: sim.tick,
         probeIndex,
         nodeCursor: nextPairIndex,
         bytes: serializeSim(sim),
         contactBest: contactBest.map((b) => ({ ...b })),
       });
-      nextCheckpointIndex++;
+      trialLog.push({
+        tick: sim.tick,
+        kind: 'burn',
+        probe: probeIndex,
+        atTick: node.atTick,
+        prograde: node.prograde,
+        lateral: node.lateral,
+      });
+      nextIssueIndex++;
     }
   };
-  maybeCheckpoint();
+  maybeIssueNodes();
 
   let ticksIntegrated = 0;
 
@@ -379,7 +400,7 @@ function runLoop({
     }
     if (stopped) break;
 
-    maybeCheckpoint();
+    maybeIssueNodes();
   }
 
   return { ticksIntegrated, finalIndex: index };
@@ -422,7 +443,7 @@ export function integrateGhost({
   let checkpoints: Checkpoint[];
   let contactBest: ContactBest[];
   let nodeCursor: number;
-  let checkpointNodeCursor: number;
+  let issueNodeCursor: number;
 
   if (resume.kind === 'resume') {
     const checkpoint = resume.checkpoint;
@@ -433,10 +454,14 @@ export function integrateGhost({
     events = cache!.ghost.events.filter(
       (e) => e.kind !== 'launch' && e.kind !== 'closestApproach' && e.tick < checkpoint.tick,
     );
-    checkpoints = cache!.checkpoints.slice(0, resume.nodeIndex + 1);
+    // checkpoint itself is `resume.nodeIndex`'s own checkpoint -- taken right before that node was
+    // issued (module header), so it has NOT been issued in this snapshot yet: keep only the
+    // earlier checkpoints (maybeIssueNodes will freshly record and re-issue this one, from the
+    // possibly-edited plan) and resume the issue cursor there, not past it.
+    checkpoints = cache!.checkpoints.slice(0, resume.nodeIndex);
     contactBest = checkpoint.contactBest.map((b) => ({ ...b }));
     nodeCursor = checkpoint.nodeCursor;
-    checkpointNodeCursor = resume.nodeIndex + 1;
+    issueNodeCursor = resume.nodeIndex;
   } else {
     sim = createSim({ scenario: level.scenario, seed: level.seed });
     advance({ sim, log, ticks: fromTick });
@@ -456,12 +481,12 @@ export function integrateGhost({
         ? Array.from({ length: sim.contacts.count }, () => ({ distance: Infinity, tick: -1 }))
         : [];
     nodeCursor = 0;
-    checkpointNodeCursor = 0;
+    issueNodeCursor = 0;
   }
 
   events.push({ kind: 'launch', tick: plan.launchTick });
 
-  const trialLog = buildTrialLog({ log, plan, probeIndex });
+  const trialLog = buildLaunchLog({ sim, log, plan });
 
   const { ticksIntegrated, finalIndex } = runLoop({
     sim,
@@ -477,7 +502,7 @@ export function integrateGhost({
     checkpoints,
     contactBest,
     nodeCursor,
-    checkpointNodeCursor,
+    issueNodeCursor,
   });
 
   for (let c = 0; c < contactBest.length; c++) {

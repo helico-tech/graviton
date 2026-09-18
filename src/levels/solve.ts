@@ -10,6 +10,7 @@ import type { Command, LaunchRejection, Scenario, Sim } from '../sim/sim.ts';
 import { createBodyTable, evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { railGeometry } from '../sim/rails.ts';
+import { issueTickFor } from '../sim/lightcone.ts';
 import { contactPoint, NO_IMPACT } from '../sim/contacts.ts';
 import { HEADING_TURN } from '../sim/commands.ts';
 import { verifyLevel } from './verify.ts';
@@ -1049,8 +1050,22 @@ function solveContact({
       evals: totalEvals,
     };
 
+  // The search above evaluates every candidate launch as if issue and effect were the same tick
+  // (evaluateLaunch's own `command.tick = launchTick`) -- exact whenever the post sits on the
+  // rail's own host (ADR-0007 §2, this unit's own levels), the only geometry the solver is asked
+  // to handle (module header: "a mid-course burn is not implemented"). The final command still
+  // goes through `issueTickFor` (ADR-0007 "Consequences": "the solver ... issues a launch at
+  // launchTick - uplink(post->rail)"), so a level whose post is genuinely offset from the rail
+  // still gets a command that arrives at the tick the search actually solved for -- a throwaway
+  // Sim is enough since a rail's own light cone never depends on prior state.
+  const solveSim = createSim({ scenario, seed });
+  const issueTick = issueTickFor({
+    sim: solveSim,
+    target: { kind: 'rail', rail: bestAttempt.railIndex },
+    atTick: bestAttempt.launchTick,
+  });
   const command = {
-    tick: bestAttempt.launchTick,
+    tick: issueTick,
     kind: 'launch' as const,
     rail: bestAttempt.railIndex,
     heading: quantizeHeading(bestAttempt.headingRad),

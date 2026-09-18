@@ -2,29 +2,29 @@
   "contacts": [
     {
       "cleared": true,
-      "closingSpeed": 66229.90048300823,
+      "closingSpeed": 102807.6129270512,
       "id": "tender-hulk",
-      "impactEnergy": 2412519844894.0454,
-      "impactTick": 199,
+      "impactEnergy": 5813172901667.112,
+      "impactTick": 127,
       "minimumImpactEnergy": 1500000000000,
-      "timeOfFlightSeconds": 5970
+      "timeOfFlightSeconds": 3810
     }
   ],
   "dtConvergence": [
     {
       "clearedAtDt": true,
       "clearedAtHalfDt": true,
-      "closingSpeedAtDt": 66229.90048300823,
-      "closingSpeedAtHalfDt": 66228.87610921806,
+      "closingSpeedAtDt": 102807.6129270512,
+      "closingSpeedAtHalfDt": 102806.60893444918,
       "id": "tender-hulk",
       "impactTimeDifferenceSeconds": 15,
-      "impactTimeSecondsAtDt": 5970,
-      "impactTimeSecondsAtHalfDt": 5985
+      "impactTimeSecondsAtDt": 3810,
+      "impactTimeSecondsAtHalfDt": 3825
     }
   ],
-  "finalStateHash": "354ffe5f890dca4f",
+  "finalStateHash": "2dfbe92785464cf3",
   "level": "T00-compiler-fixture",
-  "levelHash": "sha256:204e9c0ece448f975bdbf3c1ed5fb7054463b042bedae7d8268ff97314507d86",
+  "levelHash": "sha256:643e9667bb09654ab0d23108e8755d90933bae0ed78f931152f1f69fa9f31ff3",
   "outcome": {
     "contactsCleared": 1,
     "contactsTotal": 1,
@@ -34,6 +34,6 @@
       680
     ]
   },
-  "simVersion": 3,
-  "solutionHash": "sha256:2204394eddbe0b75cfa0de635b0d4e2d6d753c43849c4c68d99c2fe525d08220"
+  "simVersion": 4,
+  "solutionHash": "sha256:80f03c44da206470fa15e80922f04c806a4750770867a7122e15390360727c19"
 }

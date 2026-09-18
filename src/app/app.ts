@@ -48,7 +48,6 @@ import type { WarpRung } from './warp.ts';
 import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
-import { planToCommands } from '../planner/plan.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import type { Ghost } from '../planner/ghost.ts';
 import { solutionReadout } from '../planner/readout.ts';
@@ -215,8 +214,9 @@ export interface App {
   setHorizon(tick: number | null): void;
   horizon(): number | null;
   /** Re-snaps and revalidates the draft first (`reintegratePlan`, GRV-0028), exactly like every
-   *  other planner mutator, then appends `planToCommands` (plan.ts) to the session log at the
-   *  draft's own (already re-snapped) launch tick and clears it -- what commits is exactly what
+   *  other planner mutator, then appends `planToCommands` (plan.ts, via `session.commitPlan` --
+   *  GRV-0029: solving the launch's own light-cone issue tick needs the loaded `Sim`, which never
+   *  leaves debug-api.ts) to the session log and clears the draft -- what commits is exactly what
    *  the ghost most recently showed. Never throws: with no draft, or one that is still invalid
    *  after re-snapping (`planIssues()` non-empty), returns the issues instead of committing
    *  anything, so a caller (main.ts's Commit handler) can show them rather than let an uncaught
@@ -733,7 +733,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     }
 
     const probeIndex = session.state().count;
-    for (const command of planToCommands({ plan: draft, probeIndex })) session.command(command);
+    session.commitPlan({ plan: draft, probeIndex });
     plannerState = plannerDiscardDraft(plannerState);
     emit();
     return { committed: true };
