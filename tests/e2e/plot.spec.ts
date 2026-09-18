@@ -193,7 +193,8 @@ test('view() returns a copy: mutating the result does not move the camera', asyn
 
   const before = await page.evaluate(() => window.graviton!.view().metresPerPixel);
   const after = await page.evaluate(() => {
-    const leaked = window.graviton!.view();
+    // The type is readonly; the cast is the point: a caller ignoring it must still be harmless.
+    const leaked = window.graviton!.view() as { metresPerPixel: number };
     leaked.metresPerPixel = 999999;
     return window.graviton!.view().metresPerPixel;
   });
