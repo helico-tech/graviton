@@ -91,8 +91,27 @@ describe('createBodyTable validation', () => {
     ['axialPhaseAtEpoch', NaN],
     ['axialPhaseAtEpoch', Infinity],
     ['axialPhaseAtEpoch', -Infinity],
+    // docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md: [-2pi, 2pi] is the accepted
+    // range (both endpoints included), independent of the compiler's own [0, 2pi) normalisation.
+    ['argPeriapsis', 2 * Math.PI + 1e-9],
+    ['meanAnomaly0', -2 * Math.PI - 1e-9],
+    ['axialPhaseAtEpoch', 100000000 * (Math.PI / 180)], // the demonstrated 100000000 deg, in rad
   ])('throws when the orbiting body has %s = %p', (field, value) => {
     expect(() => createBodyTable([sun, { ...earthlike, [field]: value }])).toThrow();
+  });
+
+  test('accepts argPeriapsis, meanAnomaly0 and axialPhaseAtEpoch at the +-2pi boundary', () => {
+    expect(() =>
+      createBodyTable([
+        sun,
+        {
+          ...earthlike,
+          argPeriapsis: 2 * Math.PI,
+          meanAnomaly0: -2 * Math.PI,
+          axialPhaseAtEpoch: 2 * Math.PI,
+        },
+      ]),
+    ).not.toThrow();
   });
 
   test.each([
@@ -107,8 +126,16 @@ describe('createBodyTable validation', () => {
     ['rotationPeriod', Infinity],
     ['axialPhaseAtEpoch', NaN],
     ['axialPhaseAtEpoch', Infinity],
+    ['axialPhaseAtEpoch', 2 * Math.PI + 1e-9],
+    ['axialPhaseAtEpoch', -2 * Math.PI - 1e-9],
   ])('throws when the primary body has %s = %p', (field, value) => {
     expect(() => createBodyTable([{ ...sun, [field]: value }, earthlike])).toThrow();
+  });
+
+  test('accepts the primary axialPhaseAtEpoch at the +-2pi boundary', () => {
+    expect(() =>
+      createBodyTable([{ ...sun, axialPhaseAtEpoch: 2 * Math.PI }, earthlike]),
+    ).not.toThrow();
   });
 });
 

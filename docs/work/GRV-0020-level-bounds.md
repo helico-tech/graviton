@@ -1,7 +1,7 @@
 ---
 id: GRV-0020
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0020 Bounds on level data
 
@@ -26,3 +26,14 @@ range.
 - The dead export and the duplicated phrase are gone.
 
 **Verification.** `pnpm check`, `pnpm e2e`, both goldens MATCH, `levels:build --check` reports nothing stale.
+
+**Delivered.** All four acceptance lines met, test-first: `reloadTicks` bounded to Int32 in
+`createRailTable` and the compiler (positioned at `reloadTime`, not the whole document);
+`probes[].count` <= 64 and `nodeBudget` <= 16 in the schema; `validateScenario` bounds `capacity`
+and `burnNodeCapacity` to 4096 (`MAX_SCENARIO_ALLOCATION`, one named constant); the compiler
+normalises the four source angles to `[0, 2pi)` (bit-identical for in-range values) and
+`createBodyTable`/`createRailTable`/`createContactTable` bound them to `[-2pi, 2pi]` at load; the
+dead `RailGeometry` export and the duplicated `hashSim` doc-comment phrase are gone. `pnpm check`,
+`pnpm docs:validate`, `pnpm build`, `pnpm e2e` and `pnpm headless` on both goldens all green; only
+`levels/schema/level.schema.json` changed under `levels:build` (the new schema bounds), no
+compiled `.level.json` golden moved. Evidence: `docs/evidence/GRV-0020/README.md`.

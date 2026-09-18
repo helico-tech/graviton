@@ -12,6 +12,8 @@ import { parseQuantity } from './units.ts';
 const MAX_UINT32 = 4294967295;
 const MAX_ECCENTRICITY = 0.8; // mirrors src/sim/ephemeris/bodies.ts's own ceiling
 const HALF_TURN = Math.PI;
+const MAX_PROBE_COUNT = 64; // docs/issues/2026-09-18-probe-count-unbounded.md
+const MAX_NODE_BUDGET = 16; // same budget family as MAX_PROBE_COUNT, one flight plan per probe
 
 /** A field accepting either an already-SI number or a dimension-scoped unit string
  *  ("9.4 kN"), converted to SI during validation so every later stage sees plain doubles. */
@@ -109,6 +111,7 @@ const ProbeSchema = v.strictObject({
     v.number(),
     v.integer('count must be an integer'),
     v.minValue(1, 'count must be >= 1'),
+    v.maxValue(MAX_PROBE_COUNT, `count must be <= ${MAX_PROBE_COUNT}`),
   ),
   dryMass: positiveQuantity('mass'),
   propellantMass: nonNegativeQuantity('mass'),
@@ -118,6 +121,7 @@ const ProbeSchema = v.strictObject({
     v.number(),
     v.integer('nodeBudget must be an integer'),
     v.minValue(0, 'nodeBudget must be >= 0'),
+    v.maxValue(MAX_NODE_BUDGET, `nodeBudget must be <= ${MAX_NODE_BUDGET}`),
   ),
 });
 
