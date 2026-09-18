@@ -4,7 +4,8 @@
 // real DOM; here it just records what would have been shown.
 import { describe, expect, test } from 'vitest';
 import { createApp } from './app.ts';
-import type { AppChange } from './app.ts';
+import type { App, AppChange } from './app.ts';
+import { effectiveTicksThisFrame } from './loop.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
 
 const DT = 60;
@@ -53,7 +54,14 @@ describe('createApp: raw scenario loads (the parity-spec path)', () => {
     app.load({ scenario: scenario(), seed: 1 });
 
     expect(changes.at(-1)).toEqual({
-      status: { time: 'T+00:00:00:00', warp: '0x', warpEffective: '0x', post: '—', delay: '—' },
+      status: {
+        time: 'T+00:00:00:00',
+        warp: '0x',
+        warpEffective: '0x',
+        post: '—',
+        delay: '—',
+        event: '—',
+      },
       plotError: null,
       brief: null,
       justLoaded: true,
@@ -163,6 +171,7 @@ describe('createApp: level loading', () => {
       warpEffective: '—',
       post: '—',
       delay: '—',
+      event: '—',
     });
   });
 
@@ -316,8 +325,15 @@ describe('createApp: timelineData', () => {
     const data = app.timelineData()!;
 
     expect(data.cursor.tick).toBe(5);
-    expect(data.rangeTicks).toBe(5); // no solution loaded -> max(tick, 1)
-    expect(data.marks).toEqual([]); // marks come from the *solution* log, not the raw command log
+    // No solution loaded -> the old launch.N/impact.N marks stay empty; the real launch that just
+    // happened shows up as the new unified past event mark, and this scenario's own launch heading
+    // sends the probe straight back into its home body -- predictProbe finds that too, as an
+    // upcoming event, and rangeTicks stretches to cover it (GRV-0027).
+    expect(data.marks).toEqual([
+      { key: 'event.0', tick: 2, label: 'LAUNCH PRB-01', past: true },
+      { key: 'event.1', tick: 74, label: 'IMPACT PRB-01 → BODY-0', past: false },
+    ]);
+    expect(data.rangeTicks).toBe(74);
   });
 
   test('after loadSolution: a launch mark per command, range from the solution, plus impact marks', () => {
@@ -327,9 +343,18 @@ describe('createApp: timelineData', () => {
     const solution = app.solution()!;
 
     const beforeImpact = app.timelineData()!;
-    expect(beforeImpact.marks).toHaveLength(1);
+    // The old launch.N mark (from the committed solution log) plus the new unified upcoming-event
+    // mark for that same not-yet-reached launch command (GRV-0027) -- distinct keyspaces, both present.
+    expect(beforeImpact.marks).toHaveLength(2);
     expect(beforeImpact.marks[0]!.key).toBe('launch.0');
     expect(beforeImpact.marks[0]!.tick).toBe(solution.log[0]!.tick);
+    const upcoming = beforeImpact.marks.find((m) => m.key === 'event.0')!;
+    expect(upcoming).toEqual({
+      key: 'event.0',
+      tick: solution.log[0]!.tick,
+      label: 'LAUNCH',
+      past: false,
+    });
     expect(beforeImpact.rangeTicks).toBe(solution.ticks);
 
     app.warpTo(solution.ticks);
@@ -391,5 +416,180 @@ describe('createApp: AppChange.justLoaded', () => {
 
     app.setWarp(2);
     expect(changes.at(-1)!.justLoaded).toBe(false);
+  });
+});
+
+/** Drives an armed `warpToEvent` target to completion a frame's own budget at a time -- the
+ *  synchronous drain main.ts's debug API wraps `App.warpToEvent` with (design note: "debug
+ *  warpToEvent() ... advances to the target in one call"). Guarded against ever looping forever:
+ *  `step` always makes progress toward an armed target (GRV-0027's own step() doc). */
+function drainWarpToEvent(app: App): void {
+  app.warpToEvent();
+  let guard = 0;
+  while (app.warpTargetTick() !== null) {
+    app.step(effectiveTicksThisFrame(app.warpRung()));
+    if (++guard > 10_000) throw new Error('drainWarpToEvent: exceeded guard iterations');
+  }
+}
+
+describe('createApp: events (GRV-0027)', () => {
+  test('events() starts empty and returns a copy', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    const events = app.events();
+    expect(events).toEqual([]);
+    (events as unknown[]).push('mutated');
+    expect(app.events()).toEqual([]); // the mutation above never touched the app's own log
+  });
+
+  test('a launch lands in the event log with the terse status text', () => {
+    const { changes, onChange } = recorder();
+    const app = createApp({ onChange });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    app.command(launchCommand({ tick: 0 }));
+    app.step(1);
+
+    expect(app.events()).toEqual([{ tick: 0, kind: 'launch', probe: 0 }]);
+    expect(changes.at(-1)!.status.event).toBe('LAUNCH PRB-01');
+  });
+
+  test('an impact that also clears the contact announces IMPACT, the more salient of the two same-tick events', () => {
+    const { changes, onChange } = recorder();
+    const app = createApp({ onChange });
+    app.loadLevel('L01-intercept');
+    app.loadSolution();
+
+    app.warpTo(3299); // one past L01-intercept.evidence.json's own recorded impact tick (3298)
+
+    expect(app.events()).toContainEqual({ tick: 3298, kind: 'impact', probe: 0, contact: 0 });
+    expect(app.events()).toContainEqual({ tick: 3298, kind: 'cleared', contact: 0 });
+    expect(changes.at(-1)!.status.event).toBe('IMPACT PRB-01 → DRIFT-HULK');
+  });
+
+  test('the log resets on a fresh load', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand({ tick: 0 }));
+    app.step(1);
+    expect(app.events().length).toBeGreaterThan(0);
+
+    app.load({ scenario: scenario(), seed: 1 });
+
+    expect(app.events()).toEqual([]);
+  });
+});
+
+describe('createApp: automatic drop to 1x (GRV-0027, GAME-0001 §4.11)', () => {
+  test('an event landing while above 1x drops the rung to 1 and arms exactly one inverted frame', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setWarp(3); // 100x
+    app.command(launchCommand({ tick: 0 }));
+
+    app.step(1); // the launch lands this step
+
+    expect(app.warpRung()).toBe(1);
+    expect(app.takePendingInvert()).toBe(true);
+    expect(app.takePendingInvert()).toBe(false); // consumed -- exactly one frame
+  });
+
+  test('an event landing already at 1x does not flash the invert (real-time play)', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setWarp(1);
+    app.command(launchCommand({ tick: 0 }));
+
+    app.step(1);
+
+    expect(app.warpRung()).toBe(1);
+    expect(app.takePendingInvert()).toBe(false);
+  });
+
+  test('a step with no event landing leaves the rung and invert flag alone', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setWarp(3);
+
+    app.step(1);
+
+    expect(app.warpRung()).toBe(3);
+    expect(app.takePendingInvert()).toBe(false);
+  });
+});
+
+describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
+  test('nextEventTick is null with nothing loaded or nothing known', () => {
+    const app = createApp({ onChange: () => {} });
+    expect(app.nextEventTick()).toBeNull();
+
+    app.load({ scenario: scenario(), seed: 1 });
+    expect(app.nextEventTick()).toBeNull();
+  });
+
+  test('finds a committed future launch command', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand({ tick: 10 }));
+
+    expect(app.nextEventTick()).toBe(10);
+  });
+
+  test('warpToEvent is a no-op without a known upcoming event', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    const rungBefore = app.warpRung();
+
+    app.warpToEvent();
+
+    expect(app.warpRung()).toBe(rungBefore);
+    expect(app.warpTargetTick()).toBeNull();
+  });
+
+  test('warpToEvent jumps to the top rung and arms a target one past the event tick; step clamps to it and drops to 1x on arrival', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand({ tick: 10 }));
+
+    app.warpToEvent();
+    expect(app.warpRung()).toBe(5); // WARP_LADDER's top rung
+    expect(app.warpTargetTick()).toBe(11); // one past tick 10 -- sim.ts's advance() applies a
+    // tick-10 command *while processing* tick 10, which only completes once sim.tick reaches 11.
+
+    app.step(700); // a real frame's own budget -- far more than needed to reach the target
+    expect(app.state().tick).toBe(11); // never overshoots
+    expect(app.warpTargetTick()).toBeNull();
+    expect(app.warpRung()).toBe(1);
+    expect(app.events()).toEqual([{ tick: 10, kind: 'launch', probe: 0 }]);
+  });
+
+  test('warpToEvent on the real L01 solution reaches launch, then impact, in order, one frame budget at a time', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('L01-intercept');
+    app.loadSolution();
+
+    drainWarpToEvent(app);
+    expect(app.state().tick).toBe(2465); // one past the solution's own launch tick (2464)
+    expect(app.warpRung()).toBe(1);
+    expect(app.events()).toEqual([{ tick: 2464, kind: 'launch', probe: 0 }]);
+
+    drainWarpToEvent(app);
+    expect(app.state().tick).toBe(3299); // one past the recorded impact tick (3298)
+    expect(app.warpRung()).toBe(1);
+    expect(app.events()).toContainEqual({ tick: 3298, kind: 'impact', probe: 0, contact: 0 });
+  });
+
+  test('an explicit warpTo cancels an in-flight warpToEvent target', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.command(launchCommand({ tick: 500 }));
+    app.warpToEvent();
+    expect(app.warpTargetTick()).toBe(501);
+
+    app.warpTo(5);
+
+    expect(app.warpTargetTick()).toBeNull();
+    expect(app.state().tick).toBe(5);
   });
 });

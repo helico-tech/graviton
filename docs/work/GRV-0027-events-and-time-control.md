@@ -1,9 +1,18 @@
 ---
 id: GRV-0027
 epic: EPIC-06
-status: todo
+status: done
 ---
 # GRV-0027 Events and time control
+
+**Delivered.** `src/app/events.ts`'s pure `diffEvents`/`sampleClosestApproach` derive events from
+per-tick simulation-state deltas (never the renderer); `src/app/predict.ts` predicts a running
+probe's remaining flight by replaying the committed log; `app.step` accumulates them into an
+explicit session `eventLog`, auto-drops the rung to 1x and arms a single inverted status-bar frame
+(`status-bar--invert`, `data-readout="status.event"`); key `.` / debug `warpToEvent()` jump to
+`nextEventTick()` through the same budgeted per-frame loop, never a single giant advance; the
+timeline strip marks past events full and upcoming ones dim. See
+`docs/evidence/GRV-0027/README.md`.
 
 Picks up `docs/issues/2026-09-18-no-auto-drop-to-1x-on-impact.md`.
 

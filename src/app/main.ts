@@ -295,6 +295,21 @@ function changeWarp(mutate: () => void): void {
   if (!debug && from !== to) warpAnim = { from, to, start: performance.now() };
 }
 
+// Automatic drop to 1x (GRV-0027, GAME-0002 §9): a single inverted status-bar frame, never a
+// transition -- `app.takePendingInvert()` is true exactly once per landed drop, so calling this
+// once per rendered frame (the real rAF loop below, and the debug API's own `render()`) adds the
+// class for exactly the frame right after the drop and removes it on the very next one. Returns
+// whether a drop just landed, so the rAF loop below can cancel any in-flight *manual* warp ease --
+// an automatic drop is never eased, and without this an old ease already chasing a stale target
+// (say, the top rung after `.`) would keep overwriting the label with its own stale intermediate
+// value for the rest of its 150 ms, fighting the drop's already-correct synchronous write.
+function applyInvertToggle(): boolean {
+  const dropped = app.takePendingInvert();
+  if (dropped) status.element.classList.add('status-bar--invert');
+  else status.element.classList.remove('status-bar--invert');
+  return dropped;
+}
+
 window.addEventListener('keydown', (event) => {
   if (event.key === ' ') {
     event.preventDefault();
@@ -303,6 +318,10 @@ window.addEventListener('keydown', (event) => {
     changeWarp(() => app.stepWarpRung(-1));
   } else if (event.key === ']') {
     changeWarp(() => app.stepWarpRung(1));
+  } else if (event.key === '.') {
+    // Jumps to the top rung immediately (eased, like the manual warp keys above); the arrival
+    // itself is announced by the automatic drop's own inverted frame, not eased (GRV-0027).
+    changeWarp(() => app.warpToEvent());
   } else if (event.key === 'Delete') {
     const selected = app.selectedNode();
     if (selected !== null) app.removeNode({ index: selected });
@@ -317,6 +336,7 @@ if (!debug) {
   const frame = (now: number): void => {
     const ticks = effectiveTicksThisFrame(app.warpRung());
     if (ticks > 0) app.step(ticks); // step's onChange already re-renders the plot
+    if (applyInvertToggle()) warpAnim = null; // the drop's own write wins, not a stale ease
 
     if (warpAnim) {
       // docs/issues/2026-09-18-warp-label-sticks-on-eased-value.md: write every animated frame,
@@ -344,7 +364,23 @@ const driver: DebugApiDriver = {
   hash: () => app.hash(),
   state: () => app.state(),
   run: (args) => app.run(args),
-  render: () => plotController.render(),
+  events: () => app.events(),
+  nextEventTick: () => app.nextEventTick(),
+  // Synchronous (design note: "advances to the target in one call -- that is fine there"): debug
+  // mode never starts the rAF loop above, so nothing else would drain an armed warpToEvent target
+  // a frame's own budget at a time -- this loop does that itself, all within one call.
+  warpToEvent: () => {
+    app.warpToEvent();
+    let guard = 0;
+    while (app.warpTargetTick() !== null) {
+      app.step(effectiveTicksThisFrame(app.warpRung()));
+      if (++guard > 100_000) throw new Error('debug warpToEvent: exceeded guard iterations');
+    }
+  },
+  render: () => {
+    plotController.render();
+    applyInvertToggle();
+  },
   frameHash: () => plotController.frameHash(),
   view: () => plotController.getView(),
   setView: (patch) => plotController.setView(patch),
