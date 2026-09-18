@@ -24,6 +24,7 @@ player runs is under test.
   asserts time freezes and `status.warp` reads `0x` after the ease; both browsers, strict gate.
 - The build tag moves to the status bar's right edge; the timeline's cursor label no longer
   collides with anything at 1280x720 (screenshot in the evidence).
+- `view()` returns a copy (e2e: mutating the result does not change the next call).
 - ADR-0004's `loadRun` line is marked superseded; the duplicate no-debug test is removed from
   `parity.spec.ts`.
 
