@@ -115,8 +115,10 @@ export const MARKER_SHAPES = {
  *  GAME-0002 §4's separate "Dimmed solid" row: still the *solid* (observed) dash pattern, dimmed
  *  by colour alone, not a new dash to register. `ghost` is the planner's own dashed path
  *  (GRV-0026, src/render/ghost.ts) -- "Dashed | Predicted from... a loaded plan", distinct from
- *  a body's own orbit dash so the two never read as the same kind of prediction at a glance.
- *  Extrapolation and locked-plan segments are later epics and are not registered here. */
+ *  a body's own orbit dash so the two never read as the same kind of prediction at a glance. An
+ *  amendment's own locked plan segment (GRV-0031) follows the *trail's* own convention above --
+ *  `ghost`'s identical dash, `KNOWN_DIM` instead of `KNOWN` -- rather than registering a third
+ *  dash pattern here; src/render/ghost.ts's own `drawPath` does the colour switch directly. */
 export const LINE_STYLES = {
   orbit: { dash: [6, 4], color: KNOWN_DIM },
   trail: { dash: [], color: KNOWN },

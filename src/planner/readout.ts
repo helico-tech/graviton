@@ -153,10 +153,12 @@ export function solutionReadout({
     }
   }
   const lastSampledTick = ghost.fromTick + Math.max(lastIndex, 0);
-  const timeOfFlight =
-    ((earliestImpactTick ?? lastSampledTick) -
-      ghost.events.find((e) => e.kind === 'launch')!.tick) *
-    level.scenario.dt;
+  // An amendment ghost (GRV-0031) has no launch event -- the probe already exists, nothing is
+  // relaunched (src/planner/ghost.ts's own amend path never pushes one) -- so time of flight is
+  // measured from the ghost's own start (`fromTick`, "now") instead, the amendment's own
+  // equivalent of "when this plan begins."
+  const launchTick = ghost.events.find((e) => e.kind === 'launch')?.tick ?? ghost.fromTick;
+  const timeOfFlight = ((earliestImpactTick ?? lastSampledTick) - launchTick) * level.scenario.dt;
 
   const arrivalContact = primaryContact(contacts);
   const arrivalSpeed =

@@ -107,6 +107,56 @@ export function validatePlan({
  *  exercised by any level this unit ships). Launch first, so a stable sort by tick (ties in log
  *  order, `Array.prototype.sort` is stable) never lets a burn's `probe` reference an object that
  *  does not exist yet when the log is replayed. */
+/** Every burn command already committed for `probe`, sorted by `atTick` (GRV-0031's amendment
+ *  mode): the amended probe's own flight plan as it stands right now, before any edit this session
+ *  makes -- reconstructed from the log itself rather than carried separately, so there is exactly
+ *  one source of truth for "what has this probe already been told to do" (a launch's own bundled
+ *  nodes and a prior amendment's own diffed-in nodes look identical here, both just burn commands
+ *  naming this probe). */
+export function existingNodesForProbe({
+  log,
+  probe,
+}: {
+  log: readonly Command[];
+  probe: number;
+}): BurnNode[] {
+  const nodes: BurnNode[] = [];
+  for (const command of log) {
+    if (command.kind === 'burn' && command.probe === probe) {
+      nodes.push({ atTick: command.atTick, prograde: command.prograde, lateral: command.lateral });
+    }
+  }
+  return nodes.sort((a, b) => a.atTick - b.atTick);
+}
+
+function nodeEquals(a: BurnNode, b: BurnNode): boolean {
+  return a.atTick === b.atTick && a.prograde === b.prograde && a.lateral === b.lateral;
+}
+
+/** The nodes an amendment must actually transmit (GRV-0031, ADR-0007 §3): every node in `nodes`
+ *  (the amendment session's own current, full desired list -- locked, editable and new, in one
+ *  array) that has no exact value match anywhere in `existing` (the probe's already-committed
+ *  nodes, `existingNodesForProbe`) -- a genuinely new node, or an edited one, whichever position it
+ *  now sits at (index position alone is not reliable: a new node inserted before an untouched
+ *  editable one shifts every later index without editing it, `addNode`'s own sort by `atTick`).
+ *  Value equality, not index equality, so an untouched node is recognised regardless of where the
+ *  sort placed it. A node dropped from `nodes` entirely (the player deleted an editable one from
+ *  the panel) is simply never re-sent -- there is no way to cancel an already-queued command
+ *  (sim/commands.ts has no such primitive), so the original still fires; `beginNodeDrag`/
+ *  `removeNode` (src/app/planner.ts) refuse to touch a node the player hasn't added this session for
+ *  exactly this reason, but this diff itself stays honest about what it *can* do: issue, never
+ *  retract. `integrateGhost`'s own amend path and `commitPlan`'s amendment commit both call this,
+ *  so the ghost preview and what actually gets sent are the same set of commands by construction. */
+export function diffAmendmentNodes({
+  existing,
+  nodes,
+}: {
+  existing: readonly BurnNode[];
+  nodes: readonly BurnNode[];
+}): BurnNode[] {
+  return nodes.filter((node) => !existing.some((e) => nodeEquals(e, node)));
+}
+
 export function planToCommands({
   sim,
   plan,

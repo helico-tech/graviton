@@ -7,14 +7,15 @@
 // one, so src/ui/plot.ts's real pointer/keyboard input and the debug API drive it identically
 // (ADR-0004 §1). `reintegrate` is the one transition that touches the simulation's own code path
 // (via src/planner/ghost.ts); every other transition is arithmetic over the draft alone.
-import { advance, checkLaunch, createSim } from '../sim/sim.ts';
-import type { Command, LaunchRejection } from '../sim/sim.ts';
+import { advance, checkBurn, checkLaunch, createSim } from '../sim/sim.ts';
+import type { BurnRejection, Command, LaunchRejection, Sim } from '../sim/sim.ts';
 import { createBodyTable, evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { createRailTable, railGeometry } from '../sim/rails.ts';
+import { issueTickFor, uplinkArrival } from '../sim/lightcone.ts';
 import { integrateGhost } from '../planner/ghost.ts';
 import type { Ghost, GhostCache } from '../planner/ghost.ts';
-import { validatePlan } from '../planner/plan.ts';
+import { diffAmendmentNodes, existingNodesForProbe, validatePlan } from '../planner/plan.ts';
 import type { BurnNode, FlightPlan } from '../planner/plan.ts';
 import { quantizeHeading, quantizeSpeed } from '../levels/solve.ts';
 import type { CompiledLevel } from './levels.ts';
@@ -69,13 +70,47 @@ export interface NodeDrag {
 
 export type Drag = LaunchDrag | NodeDrag;
 
+/** 'draft' plans a fresh launch; 'amend' revises an already-flying probe's plan (GRV-0031,
+ *  GAME-0001 §4.4 "amendable only if its activation time is later than the moment an order sent
+ *  now would reach the probe"). */
+export type PlannerMode = 'draft' | 'amend';
+
+/** Where an order sent right now first takes effect (GAME-0001 §4.6 "command horizon", ADR-0007
+ *  §2-3, GRV-0031): for a draft, `issueTick`/`arrivalTick` are the launch's own -- the earliest the
+ *  probe can exist at all, so nothing can be commanded before `arrivalTick` either, hence
+ *  `commandHorizonTick === arrivalTick`. For an amendment, `issueTick` is simply `now` (an order to
+ *  an already-flying probe needs no launch of its own) and `arrivalTick`/`commandHorizonTick` are
+ *  both the uplink arrival of an order sent now -- kept as two fields for a uniform PLAN-panel
+ *  shape across both modes rather than a genuine second number. */
+export interface CommandHorizon {
+  readonly issueTick: number;
+  readonly arrivalTick: number;
+  readonly commandHorizonTick: number;
+}
+
 export interface PlannerState {
   readonly draft: FlightPlan | null;
+  readonly mode: PlannerMode;
+  /** The object index being amended, `null` in 'draft' mode. */
+  readonly amendProbe: number | null;
+  /** The observation tick the amendment plans against (src/app/observed.ts's own last-observation
+   *  tick at the moment amendment mode was entered), fixed for the whole session -- "the post plans
+   *  on what it knows," never the true state (module header). `null` in 'draft' mode. */
+  readonly amendObservationTick: number | null;
+  /** The amended probe's own nodes already committed at the moment amendment mode was entered
+   *  (`existingNodesForProbe`, src/planner/plan.ts), filtered to `atTick >= nowTick` at that
+   *  instant (an already-fired node is history, not part of the plan going forward) -- the
+   *  reference `beginNodeDrag`/`removeNode` check "is this node one I can't cancel" against, and
+   *  `reintegrate`/`commitPlan` diff `draft.nodes` against to find what actually needs sending.
+   *  `[]` in 'draft' mode. */
+  readonly amendExistingNodes: readonly BurnNode[];
   readonly drag: Drag | null;
   /** Explicit horizon tick for the timeline scrub (GAME-0001 §4.6 "horizon scrub"); `null` is
    *  "the present" -- nothing in the simulation moves because of this field, it only changes what
    *  tick the plot is drawn at (src/render/frame.ts's captureFrame, extended to take an explicit
-   *  time). */
+   *  time). Unrelated to `commandHorizon` below despite the shared name -- this one is a scrub
+   *  position, that one a simulated quantity (GRV-0031 keeps the two apart deliberately: `App`
+   *  exposes them as `horizon()`/`commandHorizon()`, two different methods). */
   readonly horizon: number | null;
   readonly ghost: Ghost | null;
   readonly cache: GhostCache | undefined;
@@ -94,20 +129,30 @@ export interface PlannerState {
    *  first, generalising the design note's "outside the cone or band the ghost is not drawn and
    *  the reason is shown" to cover a malformed plan the same way (GRV-0028, docs/issues/2026-09-
    *  18-reintegrate-skips-validate-plan.md); or, if the shape is fine, a single human-readable
-   *  line naming `checkLaunch`'s own rejection (capacity, reload, band, cone). Empty exactly when
-   *  the draft is valid and its ghost is current. */
+   *  line naming `checkLaunch`'s own rejection (capacity, reload, band, cone) in 'draft' mode, or
+   *  `checkBurn`'s own rejection (locked, occluded) per amended node in 'amend' mode. Empty exactly
+   *  when the draft is valid and its ghost is current. */
   readonly issues: readonly string[];
+  /** `reintegrate`'s own computed command horizon (GRV-0031), alongside `ghost`/`issues` for the
+   *  same "one source of truth" reason -- `null` without a draft or an amended probe that still
+   *  exists. */
+  readonly commandHorizon: CommandHorizon | null;
 }
 
 export function createPlannerState(): PlannerState {
   return {
     draft: null,
+    mode: 'draft',
+    amendProbe: null,
+    amendObservationTick: null,
+    amendExistingNodes: [],
     drag: null,
     horizon: null,
     ghost: null,
     cache: undefined,
     selectedNode: null,
     issues: [],
+    commandHorizon: null,
   };
 }
 
@@ -128,6 +173,12 @@ function nodeBudget(level: CompiledLevel): number {
   return level.scenario.burnNodeCapacity / level.scenario.capacity;
 }
 
+/** Replaces the draft's own data outright (debug API's own `setPlan`, a way to construct a
+ *  specific plan without a drag gesture) -- deliberately mode-preserving: called while amending
+ *  (GRV-0031) it stays in 'amend' mode with the same `amendProbe`/`amendExistingNodes`, letting a
+ *  test drive the plan through the debug API instead of a real pointer drag; called from fresh
+ *  (mode already 'draft', `createPlannerState`'s own default) it is exactly the old behaviour.
+ *  `beginLaunchDrag`/`beginAmend` are the actual mode transitions -- this never is one. */
 export function setPlan({ state, plan }: { state: PlannerState; plan: FlightPlan }): PlannerState {
   return { ...state, draft: plan, drag: null, selectedNode: null };
 }
@@ -136,11 +187,69 @@ export function discardDraft(state: PlannerState): PlannerState {
   return {
     ...state,
     draft: null,
+    mode: 'draft',
+    amendProbe: null,
+    amendObservationTick: null,
+    amendExistingNodes: [],
     drag: null,
     ghost: null,
     cache: undefined,
     selectedNode: null,
     issues: [],
+    commandHorizon: null,
+  };
+}
+
+/** Opens `probe`'s plan for amendment (GAME-0001 §4.4, GRV-0031): the draft becomes the probe's own
+ *  existing nodes (`existingNodesForProbe`, src/planner/plan.ts) filtered to what is still ahead of
+ *  `nowTick` -- an already-fired node is history, not part of the plan going forward, and never
+ *  shown. `rail`/`heading`/`speed`/`launchTick` on the resulting `FlightPlan` are never read in
+ *  amend mode (`integrateGhost`'s own amend path ignores them, ghost.ts module header) but carry
+ *  the probe's real launch command's own values anyway, found in `log`, so nothing in the shared
+ *  shape is ever a meaningless placeholder. A no-op (returns `state` unchanged) if `probe` was
+ *  never launched in `log` at all -- the caller (app.ts's own `N`/`amend()` wiring) is expected to
+ *  gate this on an actual flying-probe selection first. */
+export function beginAmend({
+  state,
+  log,
+  probe,
+  nowTick,
+  observationTick,
+}: {
+  state: PlannerState;
+  log: readonly Command[];
+  probe: number;
+  nowTick: number;
+  observationTick: number;
+}): PlannerState {
+  // A launch command doesn't itself carry its own object index (planToCommands/commitAmendment
+  // never store one either) -- pinning down *which* launch created `probe` would mean re-deriving
+  // materialisation order from the whole log (plan.ts's own documented "known limitation" for
+  // concurrent launches). Not needed here: the resulting FlightPlan's rail/heading/speed fields are
+  // inert in amend mode regardless (module header above), so any real launch command in the log is
+  // a fine, honest placeholder -- the one real requirement is that `probe` has actually flown at
+  // all, i.e. the log contains at least one launch.
+  const anyLaunch = log.find((c): c is Extract<Command, { kind: 'launch' }> => c.kind === 'launch');
+  if (!anyLaunch) return state;
+
+  const existing = existingNodesForProbe({ log, probe }).filter((n) => n.atTick >= nowTick);
+  const draft: FlightPlan = {
+    rail: anyLaunch.rail,
+    launchTick: anyLaunch.tick,
+    heading: anyLaunch.heading,
+    speed: anyLaunch.speed,
+    nodes: existing.map((n) => ({ ...n })),
+  };
+
+  return {
+    ...state,
+    draft,
+    mode: 'amend',
+    amendProbe: probe,
+    amendObservationTick: observationTick,
+    amendExistingNodes: existing,
+    drag: null,
+    selectedNode: null,
   };
 }
 
@@ -155,7 +264,14 @@ export function beginLaunchDrag({
   worldX: number;
   worldY: number;
 }): PlannerState {
-  return { ...state, drag: { kind: 'launch', rail, worldX, worldY } };
+  return {
+    ...state,
+    mode: 'draft',
+    amendProbe: null,
+    amendObservationTick: null,
+    amendExistingNodes: [],
+    drag: { kind: 'launch', rail, worldX, worldY },
+  };
 }
 
 /** The rail's own muzzle point and local vertical at `t`, the geometric anchor the launch drag's
@@ -269,10 +385,21 @@ export function selectNode({
   return { ...state, selectedNode: index };
 }
 
+/** A node is locked (GAME-0001 §4.4, GAME-0002 §4/§7, GRV-0031) once its own activation time is
+ *  earlier than the moment an order sent now would reach the probe -- `commandHorizonTick`, only
+ *  meaningful in 'amend' mode (a draft's own nodes are never locked; the whole plan is one
+ *  transmission that hasn't gone out yet, plan.ts's own "same issue batch"). */
+export function isNodeLocked({ state, node }: { state: PlannerState; node: BurnNode }): boolean {
+  return state.mode === 'amend' && node.atTick < (state.commandHorizon?.commandHorizonTick ?? 0);
+}
+
 /** Places a node at `tick` (design note "click on the ghost path... adds a node at the nearest
- *  sample tick"), sorted into position, a no-op if there is no draft, the tick is not later than
- *  the launch, or the level's per-probe node budget (levels/compile.ts) is already spent. Selects
- *  the new node so its handles are immediately visible for fine-tuning. */
+ *  sample tick"), sorted into position, a no-op if there is no draft or the level's per-probe node
+ *  budget (levels/compile.ts) is already spent. In 'draft' mode the tick must be later than the
+ *  launch; in 'amend' mode it must be at or after the command horizon (GRV-0031: "new nodes only
+ *  after it") -- refused with an issue string rather than silently, since the player's click landed
+ *  somewhere real on the ghost path and deserves a reason. Selects the new node so its handles are
+ *  immediately visible for fine-tuning. */
 export function addNode({
   state,
   level,
@@ -283,7 +410,17 @@ export function addNode({
   tick: number;
 }): PlannerState {
   if (!state.draft) return state;
-  if (tick <= state.draft.launchTick) return state;
+  if (state.mode === 'amend') {
+    const horizonTick = state.commandHorizon?.commandHorizonTick;
+    if (horizonTick === undefined || tick < horizonTick) {
+      return {
+        ...state,
+        issues: ['new node before the command horizon: order cannot arrive in time'],
+      };
+    }
+  } else if (tick <= state.draft.launchTick) {
+    return state;
+  }
   if (state.draft.nodes.length >= nodeBudget(level)) return state;
 
   const node: BurnNode = { atTick: tick, prograde: DEFAULT_NODE_PROGRADE_MM_PER_S, lateral: 0 };
@@ -292,8 +429,16 @@ export function addNode({
   return { ...state, draft: { ...state.draft, nodes }, selectedNode: index };
 }
 
+/** In 'amend' mode, an existing (already-committed) node cannot be un-sent -- there is no way to
+ *  cancel a queued command (sim/commands.ts has no such primitive, plan.ts's own `diffAmendmentNodes`
+ *  doc) -- so removing one of `amendExistingNodes` is refused with an issue string, locked or not
+ *  (a node the player only just added this session, never yet transmitted, has nothing to cancel
+ *  and can always be removed, even if it has since drifted behind the command horizon). */
 export function removeNode({ state, index }: { state: PlannerState; index: number }): PlannerState {
   if (!state.draft || index < 0 || index >= state.draft.nodes.length) return state;
+  if (state.mode === 'amend' && index < state.amendExistingNodes.length) {
+    return { ...state, issues: ['cannot remove an already-committed node'] };
+  }
   const nodes = state.draft.nodes.filter((_, i) => i !== index);
 
   // Every later node's index shifts down by one; anything referencing the removed node itself
@@ -310,6 +455,10 @@ export function removeNode({ state, index }: { state: PlannerState; index: numbe
   return { ...state, draft: { ...state.draft, nodes }, selectedNode, drag };
 }
 
+/** In 'amend' mode, a locked node (`isNodeLocked`) refuses a drag -- returned unchanged, with an
+ *  issue string, rather than starting a drag that could only ever end in the simulation's own
+ *  rejection at commit time (GRV-0031, GAME-0001 §4.4 "locked nodes are dimmed and refuse edits,
+ *  with the reason shown"). */
 export function beginNodeDrag({
   state,
   index,
@@ -324,6 +473,10 @@ export function beginNodeDrag({
   worldY: number;
 }): PlannerState {
   if (!state.draft || index < 0 || index >= state.draft.nodes.length) return state;
+  const node = state.draft.nodes[index]!;
+  if (isNodeLocked({ state, node })) {
+    return { ...state, issues: [`node ${index + 1} is locked: order cannot arrive in time`] };
+  }
   return {
     ...state,
     drag: { kind: 'node', index, handle, worldX, worldY },
@@ -430,10 +583,120 @@ function checkPlanLaunch({
   });
 }
 
+/** A throwaway `Sim` replayed to `nowTick` -- `computeCommandHorizon`/`checkAmendmentNodes`'s own
+ *  read-only anchor, mirroring `checkPlanLaunch`'s own pattern. Advancing all the way to `nowTick`
+ *  (rather than, say, tick 0) matters for an object-target light-cone query specifically
+ *  (`uplinkArrival`'s own live-state anchoring invariant, docs/evidence/GRV-0029/README.md's design
+ *  decision: "every caller ... must call it with sim.tick already close to the true issue point") --
+ *  a rail-target query does not need it (`railGeometry` is analytic in time, not sim-tick-dependent)
+ *  but is unaffected by the extra replay either. */
+function commandHorizonSim({
+  level,
+  log,
+  nowTick,
+}: {
+  level: CompiledLevel;
+  log: readonly Command[];
+  nowTick: number;
+}): Sim {
+  const sim = createSim({ scenario: level.scenario, seed: level.seed });
+  advance({ sim, log, ticks: nowTick });
+  return sim;
+}
+
+/** GAME-0001 §4.6 "command horizon" (ADR-0007 §2-3, GRV-0031): a draft's own launch/arrival
+ *  (`issueTickFor`/`uplinkArrival` against its rail, matching `planToCommands`'s own solve exactly
+ *  -- "ghost issuance is commit issuance" extends to this readout too); an amendment's uplink
+ *  arrival of an order sent right now, against the amended probe itself. `null` without a draft, or
+ *  (amend mode) once the amended probe no longer exists in `log` at `nowTick` (expended or never
+ *  launched -- should not happen through the UI's own gating, but this stays honest rather than
+ *  reading past the object table). */
+export function computeCommandHorizon({
+  level,
+  log,
+  mode,
+  draft,
+  amendProbe,
+  nowTick,
+}: {
+  level: CompiledLevel;
+  log: readonly Command[];
+  mode: PlannerMode;
+  draft: FlightPlan | null;
+  amendProbe: number | null;
+  nowTick: number;
+}): CommandHorizon | null {
+  if (!draft) return null;
+  const sim = commandHorizonSim({ level, log, nowTick });
+
+  if (mode === 'draft') {
+    const issueTick = issueTickFor({
+      sim,
+      target: { kind: 'rail', rail: draft.rail },
+      atTick: draft.launchTick,
+    });
+    const arrivalTick = uplinkArrival({
+      sim,
+      target: { kind: 'rail', rail: draft.rail },
+      issueTick,
+    });
+    return { issueTick, arrivalTick, commandHorizonTick: arrivalTick };
+  }
+
+  if (amendProbe === null || amendProbe >= sim.objects.count) return null;
+  const commandHorizonTick = uplinkArrival({
+    sim,
+    target: { kind: 'object', object: amendProbe },
+    issueTick: nowTick,
+  });
+  return { issueTick: nowTick, arrivalTick: commandHorizonTick, commandHorizonTick };
+}
+
+/** Speculatively checks every node an amendment would actually transmit (`diffAmendmentNodes`,
+ *  plan.ts) against `checkBurn` (sim/commands.ts) -- the simulation's own last line of defence
+ *  against a locked or occluded node (module doc, ADR-0007 §3-4), read here first so a doomed
+ *  amendment is reported rather than thrown from inside `integrateGhost`. Mirrors
+ *  `checkPlanLaunch`'s own read-only-Sim pattern; `nowTick` is the issue tick every amended node's
+ *  own command uses (module doc: "issued ... now"). */
+function checkAmendmentNodes({
+  level,
+  log,
+  amendProbe,
+  nowTick,
+  nodes,
+}: {
+  level: CompiledLevel;
+  log: readonly Command[];
+  amendProbe: number;
+  nowTick: number;
+  nodes: readonly BurnNode[];
+}): string[] {
+  const sim = commandHorizonSim({ level, log, nowTick });
+  const issues: string[] = [];
+  for (const node of nodes) {
+    const reason: BurnRejection | null = checkBurn({
+      sim,
+      command: {
+        tick: nowTick,
+        kind: 'burn',
+        probe: amendProbe,
+        atTick: node.atTick,
+        prograde: node.prograde,
+        lateral: node.lateral,
+      },
+    });
+    if (reason !== null) issues.push(`node at ${node.atTick}: ${reason}`);
+  }
+  return issues;
+}
+
 /** Re-integrates the ghost from the draft (GAME-0001 §4.6, determinism contract's "Ghost
  *  invariant"): if the sim's clock has reached or passed the draft's own launch tick, the launch
  *  snaps to the next tick first ("the plan can only launch in the future") -- everything
- *  downstream, including validation, reads the snapped draft, never the stale one.
+ *  downstream, including validation, reads the snapped draft, never the stale one. 'amend' mode
+ *  (GRV-0031) has no launch to snap; it dispatches to `reintegrateAmend` instead, which re-checks
+ *  the command horizon (it slides forward with the clock, GAME-0001 §4.4) and every amended node's
+ *  own `checkBurn` in its place.
  *
  *  Two checks gate integration, in order (GRV-0028, docs/issues/2026-09-18-reintegrate-skips-
  *  validate-plan.md): `validatePlan` (plan.ts) first -- a plan shape the simulation itself would
@@ -462,15 +725,26 @@ export function reintegrate({
   nowTick: number;
   horizonTick: number;
 }): PlannerState {
-  if (!state.draft) return { ...state, ghost: null, cache: undefined, issues: [] };
+  if (!state.draft) {
+    return { ...state, ghost: null, cache: undefined, issues: [], commandHorizon: null };
+  }
+  if (state.mode === 'amend') return reintegrateAmend({ state, level, log, nowTick, horizonTick });
 
   const launchTick = nowTick >= state.draft.launchTick ? nowTick + 1 : state.draft.launchTick;
   const draft: FlightPlan =
     launchTick === state.draft.launchTick ? state.draft : { ...state.draft, launchTick };
+  const commandHorizon = computeCommandHorizon({
+    level,
+    log,
+    mode: 'draft',
+    draft,
+    amendProbe: null,
+    nowTick,
+  });
 
   const shapeIssues = validatePlan({ plan: draft, level });
   if (shapeIssues.length > 0) {
-    return { ...state, draft, ghost: null, cache: undefined, issues: shapeIssues };
+    return { ...state, draft, ghost: null, cache: undefined, issues: shapeIssues, commandHorizon };
   }
 
   const launchRejection = checkPlanLaunch({ level, log, plan: draft });
@@ -481,6 +755,7 @@ export function reintegrate({
       ghost: null,
       cache: undefined,
       issues: [`launch rejected: ${launchRejection}`],
+      commandHorizon,
     };
   }
 
@@ -492,5 +767,60 @@ export function reintegrate({
     horizonTick,
     cache: state.cache,
   });
-  return { ...state, draft, ghost, cache, issues: [] };
+  return { ...state, draft, ghost, cache, issues: [], commandHorizon };
+}
+
+/** 'amend' mode's own `reintegrate` (GRV-0031): no launch to snap (the probe already exists), so
+ *  the command horizon and every amended node's own `checkBurn` are what gate integration instead
+ *  of `validatePlan`'s launch-tick check/`checkLaunch`. `validatePlan` still runs -- the node
+ *  budget/sortedness/integer-ness checks apply just as much to an amended plan. */
+function reintegrateAmend({
+  state,
+  level,
+  log,
+  nowTick,
+  horizonTick,
+}: {
+  state: PlannerState;
+  level: CompiledLevel;
+  log: readonly Command[];
+  nowTick: number;
+  horizonTick: number;
+}): PlannerState {
+  const draft = state.draft!;
+  const amendProbe = state.amendProbe;
+  const commandHorizon =
+    amendProbe === null
+      ? null
+      : computeCommandHorizon({ level, log, mode: 'amend', draft, amendProbe, nowTick });
+  if (amendProbe === null || !commandHorizon) {
+    return {
+      ...state,
+      ghost: null,
+      cache: undefined,
+      issues: ['amended probe no longer exists'],
+      commandHorizon: null,
+    };
+  }
+
+  const shapeIssues = validatePlan({ plan: draft, level });
+  if (shapeIssues.length > 0) {
+    return { ...state, ghost: null, cache: undefined, issues: shapeIssues, commandHorizon };
+  }
+
+  const toIssue = diffAmendmentNodes({ existing: state.amendExistingNodes, nodes: draft.nodes });
+  const burnIssues = checkAmendmentNodes({ level, log, amendProbe, nowTick, nodes: toIssue });
+  if (burnIssues.length > 0) {
+    return { ...state, ghost: null, cache: undefined, issues: burnIssues, commandHorizon };
+  }
+
+  const { ghost, cache } = integrateGhost({
+    level,
+    log,
+    plan: draft,
+    fromTick: nowTick,
+    horizonTick,
+    amend: { probe: amendProbe, observationTick: state.amendObservationTick ?? nowTick },
+  });
+  return { ...state, ghost, cache, issues: [], commandHorizon };
 }

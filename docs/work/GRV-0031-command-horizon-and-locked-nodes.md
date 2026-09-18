@@ -1,7 +1,7 @@
 ---
 id: GRV-0031
 epic: EPIC-07
-status: todo
+status: done
 ---
 # GRV-0031 Command horizon and locked nodes
 
@@ -45,3 +45,15 @@ timeline (GAME-0001 §4.4, §4.6 "Command horizon", "Uplink availability band"; 
 - Screenshots: locked and unlocked nodes on an amendment, the uplink band on the timeline; read.
 
 **Verification.** `pnpm check`, `pnpm e2e`, screenshots.
+
+**Delivered.** `pnpm check`/`pnpm build`/`pnpm docs:validate`/`pnpm headless` on both goldens/
+`pnpm screenshot --debug` all green (docs/evidence/GRV-0031/README.md has the full output).
+`tests/e2e/horizon.spec.ts` (both browsers) covers the full acceptance list; `planner.spec.ts`/
+`events.spec.ts`/`telemetry.spec.ts` stay green, two of them updated in place where this unit's own
+fix changed what they were asserting (see the evidence's "Deviations" for the full account: the
+dead-zone fix moves `warpToEvent()`'s landing tick for a delayed post's impact by one tick, and
+`telemetry.spec.ts`'s own dead-zone-stall test is rewritten to prove the zone is gone instead).
+Resolved both GRV-0030 findings this unit picked up. T01-far-post's own zero `burnNodeCapacity`
+meant the amendment tests (locked/editable nodes, a real committed burn to amend) run against a
+hand-built raw scenario with a real ~20-tick delay instead (T01's own committed solution has no
+burn nodes to amend at all); the horizon/warp-to-event acceptance items stay on T01 itself.

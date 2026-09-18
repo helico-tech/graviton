@@ -5,6 +5,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   addNode,
+  beginAmend,
   beginLaunchDrag,
   beginNodeDrag,
   createPlannerState,
@@ -24,6 +25,7 @@ import type { CompiledLevel } from './levels.ts';
 import type { Command } from '../sim/sim.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import { HEADING_TURN } from '../sim/commands.ts';
+import { quantizeHeading, quantizeSpeed } from '../levels/solve.ts';
 
 const DT = 60;
 const MU = 3.986004418e14;
@@ -78,12 +80,17 @@ describe('createPlannerState', () => {
   test('starts empty', () => {
     expect(createPlannerState()).toEqual({
       draft: null,
+      mode: 'draft',
+      amendProbe: null,
+      amendObservationTick: null,
+      amendExistingNodes: [],
       drag: null,
       horizon: null,
       ghost: null,
       cache: undefined,
       selectedNode: null,
       issues: [],
+      commandHorizon: null,
     });
   });
 });
@@ -499,12 +506,314 @@ describe('setHorizon and discardDraft', () => {
     state = discardDraft(state);
     expect(state).toEqual({
       draft: null,
+      mode: 'draft',
+      amendProbe: null,
+      amendObservationTick: null,
+      amendExistingNodes: [],
       drag: null,
       horizon: 7,
       ghost: null,
       cache: undefined,
       selectedNode: null,
       issues: [],
+      commandHorizon: null,
     });
+  });
+});
+
+// GRV-0031 (GAME-0001 §4.4, ADR-0007 §2-3): a level whose post is genuinely offset from its rail
+// (mirrors T01-far-post's own real fixture, docs/evidence/GRV-0030/README.md, but built by hand
+// here so tests can pick exact ticks rather than probing a bundled level) -- a small, negligible-
+// mass second body ten light-minutes out carries the only rail; the post stays on the primary.
+// `longitude: Math.PI` on the rail (not 0) faces it toward the primary rather than away, avoiding
+// the second body's own self-occlusion (mirrors T01-far-post's own comment on picking a longitude
+// that "never grazes the post's own host"). Confirmed directly: launched at tick 0, the probe
+// materialises at tick 21 and, once flying, an order sent at tick 100 arrives at tick 120 -- a real,
+// ~20-tick command horizon, without needing thousands of ticks of flight to develop one.
+function farLevel(): CompiledLevel {
+  const C = 299792458;
+  return {
+    schema: 1,
+    id: 'far-test',
+    name: 'far-test',
+    brief: '',
+    debrief: '',
+    seed: 1,
+    names: { bodies: [], rails: [], contacts: [] },
+    bodyIds: [],
+    railIds: [],
+    contactIds: [],
+    bodyClasses: [],
+    scenario: {
+      dt: 30,
+      capacity: 4,
+      burnNodeCapacity: 8, // nodeBudget 2 (8 / 4)
+      bodies: [
+        { parent: -1, mu: MU, radius: RADIUS, rotationPeriod: 1e20, axialPhaseAtEpoch: 0 },
+        {
+          parent: 0,
+          mu: 1,
+          radius: 1e6,
+          rotationPeriod: 1e20,
+          axialPhaseAtEpoch: 0,
+          a: 10 * 60 * C,
+          e: 0,
+          argPeriapsis: 0,
+          meanAnomaly0: 0,
+        },
+      ],
+      rails: [
+        {
+          host: 1,
+          longitude: Math.PI,
+          muzzleSpeedMin: 1000,
+          muzzleSpeedMax: 100000,
+          headingCone: CONE,
+          reloadTicks: 0,
+        },
+      ],
+      contacts: [],
+      post: { host: 0, longitude: 0 },
+      historyTicks: 4096,
+      probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
+      streams: [],
+    },
+  };
+}
+
+const FAR_LAUNCH: Command = {
+  tick: 0,
+  kind: 'launch',
+  rail: 0,
+  heading: quantizeHeading(Math.PI),
+  speed: quantizeSpeed(50000),
+};
+const FAR_MATERIALISE_TICK = 21;
+const FAR_NOW_TICK = 100;
+const FAR_COMMAND_HORIZON_TICK = 120; // uplinkArrival(object 0, issueTick 100), confirmed above
+
+describe('amendment mode (GRV-0031)', () => {
+  const lvl = farLevel();
+
+  test('beginAmend opens the probe’s own existing (still-ahead) nodes for amendment', () => {
+    const log: Command[] = [
+      FAR_LAUNCH,
+      { tick: 0, kind: 'burn', probe: 0, atTick: 50, prograde: 1, lateral: 0 }, // already fired by now
+      { tick: 0, kind: 'burn', probe: 0, atTick: 110, prograde: 2, lateral: 0 }, // still ahead, locked
+    ];
+    const state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    expect(state.mode).toBe('amend');
+    expect(state.amendProbe).toBe(0);
+    // The atTick-50 node already fired by tick 100 -- history, not part of the plan going forward.
+    expect(state.draft!.nodes).toEqual([{ atTick: 110, prograde: 2, lateral: 0 }]);
+    expect(state.amendExistingNodes).toEqual([{ atTick: 110, prograde: 2, lateral: 0 }]);
+  });
+
+  test('beginAmend on a probe that was never launched is a no-op', () => {
+    const state = beginAmend({
+      state: createPlannerState(),
+      log: [],
+      probe: 0,
+      nowTick: 0,
+      observationTick: 0,
+    });
+    expect(state.mode).toBe('draft');
+    expect(state.draft).toBeNull();
+  });
+
+  test('reintegrate computes the command horizon and integrates a ghost from now', () => {
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+    expect(state.commandHorizon).toEqual({
+      issueTick: FAR_NOW_TICK,
+      arrivalTick: FAR_COMMAND_HORIZON_TICK,
+      commandHorizonTick: FAR_COMMAND_HORIZON_TICK,
+    });
+    expect(state.ghost).not.toBeNull();
+    expect(state.ghost!.fromTick).toBe(FAR_NOW_TICK);
+    expect(state.ghost!.probeIndex).toBe(0);
+    expect(state.issues).toEqual([]);
+  });
+
+  test('beginNodeDrag refuses a locked node (before the command horizon) with an issue, dragging nothing', () => {
+    const log: Command[] = [
+      FAR_LAUNCH,
+      { tick: 0, kind: 'burn', probe: 0, atTick: 110, prograde: 2, lateral: 0 },
+    ];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+    expect(state.draft!.nodes[0]!.atTick).toBeLessThan(state.commandHorizon!.commandHorizonTick);
+
+    const before = state;
+    state = beginNodeDrag({ state, index: 0, handle: 'prograde', worldX: 0, worldY: 0 });
+    expect(state.drag).toBeNull();
+    expect(state.issues[0]).toContain('locked');
+    expect(state.draft).toBe(before.draft); // nothing about the plan itself changed
+  });
+
+  test('beginNodeDrag allows an editable node (at or after the command horizon)', () => {
+    const log: Command[] = [
+      FAR_LAUNCH,
+      { tick: 0, kind: 'burn', probe: 0, atTick: 150, prograde: 2, lateral: 0 },
+    ];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+    expect(state.draft!.nodes[0]!.atTick).toBeGreaterThanOrEqual(
+      state.commandHorizon!.commandHorizonTick,
+    );
+
+    state = beginNodeDrag({ state, index: 0, handle: 'prograde', worldX: 0, worldY: 0 });
+    expect(state.drag).toEqual({
+      kind: 'node',
+      index: 0,
+      handle: 'prograde',
+      worldX: 0,
+      worldY: 0,
+    });
+  });
+
+  test('removeNode refuses an already-committed node, whether locked or not, with an issue', () => {
+    const log: Command[] = [
+      FAR_LAUNCH,
+      { tick: 0, kind: 'burn', probe: 0, atTick: 150, prograde: 2, lateral: 0 }, // editable, but existing
+    ];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    const before = state;
+    state = removeNode({ state, index: 0 });
+    expect(state.draft).toBe(before.draft);
+    expect(state.issues[0]).toContain('cannot remove');
+  });
+
+  test('addNode refuses a tick before the command horizon, with an issue, and accepts one at or after it', () => {
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+
+    const refused = addNode({ state, level: lvl, tick: FAR_COMMAND_HORIZON_TICK - 1 });
+    expect(refused.draft!.nodes).toEqual([]);
+    expect(refused.issues[0]).toContain('command horizon');
+
+    const accepted = addNode({ state, level: lvl, tick: FAR_COMMAND_HORIZON_TICK + 10 });
+    expect(accepted.draft!.nodes).toEqual([
+      { atTick: FAR_COMMAND_HORIZON_TICK + 10, prograde: 1, lateral: 0 },
+    ]);
+  });
+
+  test('a new node past the command horizon integrates into the ghost and reports no issues', () => {
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+    state = addNode({ state, level: lvl, tick: FAR_COMMAND_HORIZON_TICK + 20 });
+    state = reintegrate({ state, level: lvl, log, nowTick: FAR_NOW_TICK, horizonTick: 400 });
+
+    expect(state.issues).toEqual([]);
+    expect(state.ghost).not.toBeNull();
+    // The default node (1 mm/s, addNode's own placeholder -- a real drag would set a meaningful
+    // delta-v) is tiny enough to finish within a single tick, so it may not land on the sample
+    // grid as its own nodeStart/nodeEnd pair -- fuel consumption is the robust signal that it
+    // fired at all.
+    const ghost = state.ghost!;
+    expect(ghost.samples.mass[ghost.samples.count - 1]!).toBeLessThan(ghost.samples.mass[0]!);
+  });
+
+  test('discardDraft (Escape) leaves amendment mode and returns to draft', () => {
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    state = discardDraft(state);
+    expect(state.mode).toBe('draft');
+    expect(state.amendProbe).toBeNull();
+    expect(state.draft).toBeNull();
+  });
+
+  test('setPlan preserves amend mode -- it replaces the draft’s own data, never a mode transition', () => {
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_NOW_TICK,
+      observationTick: FAR_NOW_TICK,
+    });
+    expect(state.mode).toBe('amend');
+
+    state = setPlan({
+      state,
+      plan: { ...state.draft!, nodes: [{ atTick: 200, prograde: 5, lateral: 0 }] },
+    });
+    expect(state.mode).toBe('amend');
+    expect(state.amendProbe).toBe(0);
+    expect(state.draft!.nodes).toEqual([{ atTick: 200, prograde: 5, lateral: 0 }]);
+  });
+
+  test('a materialised-but-not-yet-observed probe amends fine at tick FAR_MATERIALISE_TICK + 1', () => {
+    // Confirms beginAmend/reintegrate work immediately after materialisation, not only much later
+    // (FAR_NOW_TICK above) -- the command horizon simply sits close to now this early in the flight.
+    const log: Command[] = [FAR_LAUNCH];
+    let state = beginAmend({
+      state: createPlannerState(),
+      log,
+      probe: 0,
+      nowTick: FAR_MATERIALISE_TICK + 1,
+      observationTick: FAR_MATERIALISE_TICK + 1,
+    });
+    state = reintegrate({
+      state,
+      level: lvl,
+      log,
+      nowTick: FAR_MATERIALISE_TICK + 1,
+      horizonTick: 400,
+    });
+    expect(state.commandHorizon).not.toBeNull();
+    expect(state.commandHorizon!.commandHorizonTick).toBeGreaterThan(FAR_MATERIALISE_TICK);
+    expect(state.ghost).not.toBeNull();
   });
 });
