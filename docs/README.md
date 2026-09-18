@@ -30,6 +30,7 @@ Declared layout for this repository. Amend deliberately; record why in an ADR.
 7. `adr/2026-09-03-0004-headless-validation-and-evidence.md` — how the agent proves things.
 8. `adr/2026-09-03-0005-simulation-numerics.md` — the numerical recipes and the corrected formulas.
 9. `adr/2026-09-17-0006-level-format-and-solvability-evidence.md` — levels as data, and how each is proven solvable.
+10. `adr/2026-09-18-0007-signal-delay-model.md` — how orders and telemetry travel at `c` inside the tick clock.
 
 ## Repo scripts
 
