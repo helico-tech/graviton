@@ -51,10 +51,11 @@ describe('rng', () => {
 
   test('float draws stay in [0, 1)', () => {
     const stream = createStream({ seed: 1, name: 'range_check' });
+    let outOfRange = 0;
     for (let i = 0; i < 200_000; i++) {
       const value = drawUnit(stream);
-      expect(value).toBeGreaterThanOrEqual(0);
-      expect(value).toBeLessThan(1);
+      if (!(value >= 0 && value < 1)) outOfRange++;
     }
+    expect(outOfRange).toBe(0);
   });
 });
