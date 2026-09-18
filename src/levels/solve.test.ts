@@ -276,28 +276,35 @@ describe('evaluateLaunch: against the real compiler fixture', () => {
   });
 });
 
+// A real solve takes ~4 s here and more on CI runners; vitest's default is 5 s.
+const SOLVE_TIMEOUT_MS = 120_000;
+
 describe('solveLevel: the compiler fixture, from scratch', () => {
-  test('finds a launch that clears, ignoring the committed solution, and passes verifyLevel', () => {
-    const level = loadFixture();
-    const result = solveLevel({
-      level,
-      options: { window: { start: 0, end: 30 }, maxFlightTicks: 260, budget: 4000 },
-    });
+  test(
+    'finds a launch that clears, ignoring the committed solution, and passes verifyLevel',
+    () => {
+      const level = loadFixture();
+      const result = solveLevel({
+        level,
+        options: { window: { start: 0, end: 30 }, maxFlightTicks: 260, budget: 4000 },
+      });
 
-    if (!('solution' in result))
-      throw new Error(`expected a solution, got failure: ${result.failure}`);
-    const solution: LevelSolution = result.solution;
-    expect(solution.level).toBe(level.id);
+      if (!('solution' in result))
+        throw new Error(`expected a solution, got failure: ${result.failure}`);
+      const solution: LevelSolution = result.solution;
+      expect(solution.level).toBe(level.id);
 
-    const { evidence, failures } = verifyLevel({
-      level,
-      levelHash: 'sha256:test',
-      solution,
-      solutionHash: 'sha256:test',
-    });
-    expect(failures).toEqual([]);
-    expect(evidence.outcome.contactsCleared).toBe(evidence.outcome.contactsTotal);
-  });
+      const { evidence, failures } = verifyLevel({
+        level,
+        levelHash: 'sha256:test',
+        solution,
+        solutionHash: 'sha256:test',
+      });
+      expect(failures).toEqual([]);
+      expect(evidence.outcome.contactsCleared).toBe(evidence.outcome.contactsTotal);
+    },
+    SOLVE_TIMEOUT_MS,
+  );
 
   test('determinism: two runs on the same level produce byte-identical solutions', () => {
     const level = loadFixture();
