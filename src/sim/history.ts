@@ -108,7 +108,11 @@ export interface SampledState {
  *  case that dominates cruise, and it hands the light-cone solvers their derivative term (velocity)
  *  for free. Throws if `t` falls outside the retained window or before the object existed --
  *  callers (lightcone.ts) are expected to check `firstAvailableTick`/`history.lastTick` first when
- *  they need a non-throwing answer. */
+ *  they need a non-throwing answer. `t` landing exactly on `last` (the most recently recorded tick
+ *  -- `sim.ts`'s `advance` always leaves it equal to `sim.tick`, so this is the ordinary "what do
+ *  we see right now" query, not a corner case, GRV-0030) needs no "next" sample: the Hermite basis
+ *  at `s=0` reduces to exactly the `t0` endpoint (`h01`/`h11`, the terms reading `x1`/`vx1` etc.,
+ *  are both zero there), so that sample alone already is the answer. */
 export function sampleState({
   history,
   object,
@@ -122,22 +126,24 @@ export function sampleState({
 }): SampledState {
   const tickFloat = t / dt;
   const t0 = Math.floor(tickFloat);
-  const t1 = t0 + 1;
   const first = firstAvailableTick(history, object);
   const last = history.lastTick[object]!;
-  if (first === NEVER_RECORDED || t0 < first || t1 > last) {
+  if (first === NEVER_RECORDED || t0 < first || t0 > last) {
     throw new Error(
       `sampleState: object ${object} has no retained sample covering t=${t} (tick ${tickFloat})`,
     );
   }
 
-  const s = tickFloat - t0;
   const i0 = object * history.historyTicks + slotFor(history, t0);
-  const i1 = object * history.historyTicks + slotFor(history, t1);
   const x0 = history.x[i0]!;
   const y0 = history.y[i0]!;
   const vx0 = history.vx[i0]!;
   const vy0 = history.vy[i0]!;
+  if (t0 === last) return { x: x0, y: y0, vx: vx0, vy: vy0 };
+
+  const t1 = t0 + 1;
+  const s = tickFloat - t0;
+  const i1 = object * history.historyTicks + slotFor(history, t1);
   const x1 = history.x[i1]!;
   const y1 = history.y[i1]!;
   const vx1 = history.vx[i1]!;

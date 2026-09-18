@@ -13,23 +13,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { GlobalFonts, createCanvas } from '@napi-rs/canvas';
 import { createDebugSession } from '../app/debug-api.ts';
+// `CompiledLevel` is a type-only import (erased at build time, unlike src/app/levels.ts's own
+// `import.meta.glob`, which is Vite-only and genuinely can't run here) -- observedObjects's own
+// replay (src/app/observed.ts) needs the full shape, not just FrameLevelNames's render-facing
+// subset, so this reads a compiled level's JSON straight off disk (the same way
+// scripts/levels-verify.ts does) and asserts it against that type.
+import type { CompiledLevel } from '../app/levels.ts';
+import { createObservedCache } from '../app/observed.ts';
+import type { ObservedObject } from '../app/observed.ts';
 import { parseSelectionParam } from '../app/selection.ts';
 import type { SelectionTarget } from '../app/selection.ts';
-import { createTrailSet, sampleTrailSet, trailPoints } from '../app/trails.ts';
+import { createTrailSet, sampleObservedTrailSet, trailPoints } from '../app/trails.ts';
 import { defaultView } from '../render/camera.ts';
 import type { View } from '../render/camera.ts';
 import { hashCanvasPixels, renderPlot } from '../render/plot.ts';
-import type { FrameLevelNames } from '../render/frame.ts';
 import type { Ctx2D } from '../render/ctx2d.ts';
-import type { Command, Scenario } from '../sim/sim.ts';
+import type { Command } from '../sim/sim.ts';
 import { parseFlags, repoRoot } from '../../scripts/lib/repo.ts';
-
-interface CompiledLevelFile extends FrameLevelNames {
-  schema: 1;
-  id: string;
-  seed: number;
-  scenario: Scenario;
-}
 
 interface SolutionFile {
   level: string;
@@ -109,11 +109,13 @@ export interface RenderResult {
  *  shelling out. */
 export function renderLevel(flags: RenderFlags): RenderResult {
   const levelPath = path.join(repoRoot, 'levels', `${flags.level}.level.json`);
-  const level = JSON.parse(fs.readFileSync(levelPath, 'utf8')) as CompiledLevelFile;
+  const level = JSON.parse(fs.readFileSync(levelPath, 'utf8')) as CompiledLevel;
 
   const session = createDebugSession();
   session.load({ scenario: level.scenario, seed: level.seed });
   const trailSet = createTrailSet();
+  const observedCache = createObservedCache();
+  let observed: ObservedObject[] = [];
 
   let ticks = flags.tick ?? 0;
   if (flags.solution) {
@@ -122,9 +124,20 @@ export function renderLevel(flags: RenderFlags): RenderResult {
     for (const command of solution.log) session.command(command);
     ticks = flags.tick ?? solution.ticks;
   }
-  session.stepSampled(ticks, (positions) => sampleTrailSet(trailSet, positions));
+  session.stepSampled({
+    ticks,
+    level,
+    cache: observedCache,
+    onTick: (_positions, sample) => {
+      sampleObservedTrailSet(
+        trailSet,
+        sample.observed.map((o) => o.observation),
+      );
+      observed = sample.observed;
+    },
+  });
 
-  const frame = session.captureFrame(level);
+  const frame = session.captureFrame(level, observed);
   let view: View = defaultView({
     largestOrbitRadius: frame.systemExtent,
     canvasWidth: flags.width,
@@ -137,6 +150,12 @@ export function renderLevel(flags: RenderFlags): RenderResult {
   const trails = new Map<number, readonly { x: number; y: number }[]>();
   trailSet.buffers.forEach((buffer, index) => trails.set(index, trailPoints(buffer)));
 
+  const predictedTails = new Map<number, readonly { x: number; y: number }[]>();
+  observed.forEach((objectView, index) => {
+    if (objectView.observation)
+      predictedTails.set(index, [objectView.observation, ...objectView.tail]);
+  });
+
   const canvas = createCanvas(flags.width, flags.height);
   const ctx = canvas.getContext('2d');
   // `SKRSContext2D.fillStyle`/`strokeStyle` are typed wider than `Ctx2D`'s string-only contract
@@ -147,6 +166,7 @@ export function renderLevel(flags: RenderFlags): RenderResult {
     view,
     frame,
     trails,
+    predictedTails,
     canvasWidth: flags.width,
     canvasHeight: flags.height,
     selection: flags.select ?? null,

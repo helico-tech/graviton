@@ -189,6 +189,40 @@ function drawTrail(
   ctx.stroke();
 }
 
+// GAME-0002 §4 "Dotted, fading tail": the segment nearest the observation (stalest) fades toward
+// this floor, the segment nearest the predicted present reaches full opacity -- never fully
+// invisible, since even the oldest predicted point is still real information.
+const PREDICTED_TAIL_MIN_ALPHA = 0.2;
+
+/** The dotted tail from an object's last observation to its predicted present (GRV-0030, GAME-0002
+ *  §4 "Dotted, fading tail | Extrapolated from a stale observation"): `points` is
+ *  `[observation, ...tail]` in world space, oldest first -- drawn as `points.length - 1` short
+ *  segments, each its own `stroke()` call, so every segment can fade to its own alpha (Canvas2D has
+ *  no per-vertex alpha on a single path). A single-point tail (nothing predicted beyond the
+ *  observation -- already expended as observed) draws nothing, matching `drawTrail`'s own
+ *  less-than-2-points rule. */
+function drawPredictedTail(
+  ctx: Ctx2D,
+  { points }: { points: readonly { x: number; y: number }[] },
+): void {
+  if (points.length < 2) return;
+  const segments = points.length - 1;
+  ctx.strokeStyle = LINE_STYLES.predicted.color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([...LINE_STYLES.predicted.dash]);
+  for (let i = 0; i < segments; i++) {
+    const from = points[i]!;
+    const to = points[i + 1]!;
+    const fraction = segments > 1 ? i / (segments - 1) : 1;
+    ctx.globalAlpha = PREDICTED_TAIL_MIN_ALPHA + (1 - PREDICTED_TAIL_MIN_ALPHA) * fraction;
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
 /** A small triangle pointing along the probe's current velocity (GRV-0022 acceptance); expended
  *  probes dim to `KNOWN_DIM`. */
 function drawProbe(
@@ -279,6 +313,12 @@ export interface RenderPlotArgs {
    *  via `trailPoints`) -- already sampled positions, in world coordinates; `renderPlot` only
    *  projects them to screen space. */
   trails: ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** One dotted-tail point list per `frame.objects` index (GRV-0030, src/app/observed.ts's own
+   *  `ObservedObject`) -- `[observation, ...tail]`, oldest first, world coordinates; an index with
+   *  no observation, or nothing predicted beyond it, is simply absent (drawn as nothing, matching
+   *  `trails`' own convention for an object with no samples yet). `undefined` draws no tails at
+   *  all (headless/render.ts's own callers that never pass one). */
+  predictedTails?: ReadonlyMap<number, readonly { x: number; y: number }[]>;
   canvasWidth: number;
   canvasHeight: number;
   /** The app's own selection state (src/app/selection.ts), read-only -- the renderer only draws
@@ -340,7 +380,9 @@ function selectionRingGeometry({
     }
     case 'probe': {
       const object = frame.objects[selection.index];
-      if (!object) return null;
+      // Unobserved (GRV-0030): nothing is drawn for this probe at all, so there is nothing to
+      // ring either.
+      if (!object || !object.observed) return null;
       return {
         x: object.x,
         y: object.y,
@@ -387,6 +429,7 @@ export function renderPlot({
   view,
   frame,
   trails,
+  predictedTails,
   canvasWidth,
   canvasHeight,
   selection,
@@ -412,13 +455,22 @@ export function renderPlot({
   for (const contact of frame.contacts)
     drawContact(ctx, { contact, view, canvasWidth, canvasHeight });
 
+  // Nothing is drawn for an object the post has never observed (GRV-0030, frame.ts's own doc): no
+  // trail, no dotted tail, no marker -- the true live state is never shown.
   frame.objects.forEach((object, index) => {
+    if (!object.observed) return;
     const points = (trails.get(index) ?? []).map((point) =>
       worldToScreen({ view, canvasWidth, canvasHeight, ...point }),
     );
     drawTrail(ctx, { points, color: object.expended ? KNOWN_DIM : KNOWN });
+    const tail = (predictedTails?.get(index) ?? []).map((point) =>
+      worldToScreen({ view, canvasWidth, canvasHeight, ...point }),
+    );
+    drawPredictedTail(ctx, { points: tail });
   });
-  for (const object of frame.objects) drawProbe(ctx, { object, view, canvasWidth, canvasHeight });
+  frame.objects.forEach((object) => {
+    if (object.observed) drawProbe(ctx, { object, view, canvasWidth, canvasHeight });
+  });
   drawSelectionRing(ctx, { selection, frame, view, canvasWidth, canvasHeight });
   drawPlannerFrame(ctx, { frame: planner ?? null, view, canvasWidth, canvasHeight });
 

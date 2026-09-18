@@ -19,9 +19,12 @@ import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { contactPoint } from '../sim/contacts.ts';
 import { postPosition } from '../sim/post.ts';
 import { captureFrame as captureFrameOf } from '../render/frame.ts';
-import type { Frame, FrameLevelNames } from '../render/frame.ts';
+import type { Frame, FrameLevelNames, FrameObservation } from '../render/frame.ts';
 import type { View } from '../render/camera.ts';
-import { describeSelection as describeSelectionOf } from './selection.ts';
+import type { CompiledLevel } from './levels.ts';
+import { observedObjects } from './observed.ts';
+import type { ObservedCache, ObservedObject } from './observed.ts';
+import { delayToSelection, describeSelection as describeSelectionOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
 import type { EventContactState, EventObjectState, SimEvent } from './events.ts';
 import { planToCommands } from '../planner/plan.ts';
@@ -70,17 +73,21 @@ export interface StateSnapshot {
 }
 
 /** Every live object's/contact's event-relevant state at one tick (GRV-0027, events.ts), plus
- *  every contact's world position at that same tick -- `stepSampled`'s own per-tick loop already
- *  evaluates the ephemeris for `positions` and trails; this extends that same sampling point
- *  rather than adding a second loop, so app.ts can feed both `diffEvents` (from `objects`/
- *  `contacts`) and `sampleClosestApproach` (from `positions` paired with `contactPositions`)
- *  without stepping the sim twice. */
+ *  every contact's world position at that same tick and every object's observed view (GRV-0030,
+ *  src/app/observed.ts) -- `stepSampled`'s own per-tick loop already evaluates the ephemeris for
+ *  `positions` and trails; this extends that same sampling point rather than adding a second loop,
+ *  so app.ts can feed `diffObservedEvents` (from `observed`), the closest-approach exclusion check
+ *  (from `objects`/`contacts`, still live -- closest approach stays a prediction, not a telemetry
+ *  event) and `sampleClosestApproach` (from `positions` paired with `contactPositions`) without
+ *  stepping the sim twice. */
 export interface TickEventSample {
   tick: number;
   objects: EventObjectState[];
   contacts: EventContactState[];
   /** Parallel to `contacts` -- `[]` when the level has none, never computed otherwise. */
   contactPositions: { x: number; y: number }[];
+  /** Every dynamic object's observed view at this tick (GRV-0030) -- parallel to `objects`. */
+  observed: ObservedObject[];
 }
 
 export interface LoadArgs {
@@ -128,22 +135,34 @@ export interface DebugSession {
    *  src/headless/render.ts both drive (GRV-0022 design), so a trail is sampled once per
    *  simulation tick regardless of how many ticks a single call advances (a warp frame stepping
    *  hundreds of ticks still samples every one of them, just more cheaply than a full
-   *  `StateSnapshot` copy per tick would). */
-  stepSampled(
-    ticks: number,
-    onTick: (positions: readonly { x: number; y: number }[], sample: TickEventSample) => void,
-  ): StateSnapshot;
+   *  `StateSnapshot` copy per tick would). `level`/`cache` are the observed view's own replay
+   *  inputs (GRV-0030, src/app/observed.ts) -- computed every tick, not just once per call, so a
+   *  telemetry event landing mid-warp is never missed the same way a live one wouldn't be; `cache`
+   *  persists across calls (app.ts owns it, like `TrailSet`), so this stays cheap (the observation
+   *  tick advances by about one tick per app tick). */
+  stepSampled(args: {
+    ticks: number;
+    level: CompiledLevel;
+    cache: ObservedCache;
+    onTick: (positions: readonly { x: number; y: number }[], sample: TickEventSample) => void;
+  }): StateSnapshot;
   hash(): string;
   state(): StateSnapshot;
   /** A read-only render snapshot of the loaded `Sim` (src/render/frame.ts) -- the one place
    *  outside `src/render` a live `Sim` is read for drawing; `Sim` itself never leaves this module.
-   *  `t`, if given, is the horizon scrub's own override (GRV-0026, captureFrame's own doc). */
-  captureFrame(level: FrameLevelNames, t?: number): Frame;
+   *  `observed` is the caller's own already-computed observed view (GRV-0030, one entry per
+   *  `sim.objects` index -- app.ts recomputes it once per `stepSampled` call and reuses the result
+   *  here rather than replaying again). `t`, if given, is the horizon scrub's own override
+   *  (GRV-0026, captureFrame's own doc). */
+  captureFrame(level: FrameLevelNames, observed: readonly FrameObservation[], t?: number): Frame;
   /** Every selection-panel field for `selection`, computed straight from the loaded `Sim`
    *  (src/app/selection.ts's `describeSelection`, GRV-0023) -- mirrors `captureFrame`'s boundary:
    *  the one place outside `src/render` (this module) a live `Sim` is read, `Sim` itself never
    *  leaves it. */
   describeSelection(level: FrameLevelNames, selection: Selection): ReadoutRow[];
+  /** One-way delay to `selection`, in seconds (GAME-0002 §8's status bar `DELAY`, GRV-0030,
+   *  src/app/selection.ts's `delayToSelection`) -- `null` for a body or no selection. */
+  delay(selection: Selection): number | null;
   /** Runs a fresh, independent `Sim` to completion and reports its hash and
    *  final tick -- the loaded session (if any) is untouched. */
   run(args: RunArgs): RunResult;
@@ -262,7 +281,7 @@ export function createDebugSession(): DebugSession {
       return snapshot(s);
     },
 
-    stepSampled(ticks, onTick) {
+    stepSampled({ ticks, level, cache, onTick }) {
       const s = loaded();
       const eph = makeEph(s.bodies.count);
       for (let i = 0; i < ticks; i++) {
@@ -283,11 +302,13 @@ export function createDebugSession(): DebugSession {
         for (let c = 0; c < s.contacts.count; c++) {
           contacts[c] = { cleared: cs.cleared[c]! !== 0, impactTick: cs.impactTick[c]! };
         }
+        const { views: observed } = observedObjects({ level, log, sim: s, cache });
         onTick(positions, {
           tick: s.tick,
           objects,
           contacts,
           contactPositions: contactPositions(s, eph),
+          observed,
         });
       }
       return snapshot(s);
@@ -301,8 +322,12 @@ export function createDebugSession(): DebugSession {
       return snapshot(loaded());
     },
 
-    captureFrame(level, t) {
-      return captureFrameOf({ sim: loaded(), level, t });
+    captureFrame(level, observed, t) {
+      return captureFrameOf({ sim: loaded(), level, observed, t });
+    },
+
+    delay(selection) {
+      return delayToSelection({ sim: loaded(), selection });
     },
 
     describeSelection(level, selection) {
@@ -371,6 +396,11 @@ export interface DebugApiDriver {
   commitPlan(): { committed: true } | { committed: false; issues: string[] };
   setHorizon(tick: number | null): void;
   planSolution(): SolutionReadout | null;
+  /** `index`'s own observed view as of the current tick (GRV-0030, src/app/observed.ts) -- `null`
+   *  for an out-of-range index. */
+  observed(index: number): ObservedObject | null;
+  /** One-way delay to `selection`, in seconds -- `null` for a body or no selection. */
+  delay(selection: Selection): number | null;
 }
 
 export interface DebugApi {
@@ -425,6 +455,9 @@ export interface DebugApi {
   /** The current draft's ghost solution readout (src/planner/readout.ts) -- `null` without a
    *  draft, a ghost, or a currently feasible launch. */
   solution(): SolutionReadout | null;
+  // -- Telemetry (GRV-0030, ADR-0007 §5-6).
+  observed(index: number): ObservedObject | null;
+  delay(selection: Selection): number | null;
 }
 
 declare global {
@@ -478,6 +511,8 @@ export function installDebugApi(driver: DebugApiDriver): void {
     commitPlan: () => driver.commitPlan(),
     setHorizon: (tick) => driver.setHorizon(tick),
     solution: () => driver.planSolution(),
+    observed: (index) => driver.observed(index),
+    delay: (selection) => driver.delay(selection),
   };
   window.graviton = api;
 

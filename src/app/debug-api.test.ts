@@ -6,6 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { createDebugSession } from './debug-api.ts';
+import { createObservedCache } from './observed.ts';
+import type { CompiledLevel } from './levels.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
 import { repoRoot } from '../../scripts/lib/repo.ts';
 
@@ -14,6 +16,27 @@ interface GoldenFile {
   seed: number;
   log: Command[];
   ticks: number;
+}
+
+/** A placeholder `CompiledLevel` around a raw `Scenario`/seed -- mirrors app.ts's own
+ *  `wrapScenarioAsLevel`, restated here since it isn't exported (this module tests the session in
+ *  isolation from app.ts). `stepSampled`'s own observed-view replay needs a full `CompiledLevel`,
+ *  not just the `FrameLevelNames` subset `captureFrame`/`describeSelection` take. */
+function wrapAsLevel({ scenario, seed }: { scenario: Scenario; seed: number }): CompiledLevel {
+  return {
+    schema: 1,
+    id: '',
+    name: '',
+    brief: '',
+    debrief: '',
+    seed,
+    names: { bodies: [], rails: [], contacts: [] },
+    bodyIds: [],
+    railIds: [],
+    contactIds: [],
+    bodyClasses: [],
+    scenario,
+  };
 }
 
 function loadGolden(name: string): GoldenFile {
@@ -158,7 +181,12 @@ describe('createDebugSession', () => {
     const viaSampled = createDebugSession();
     viaSampled.load({ scenario: scenario(), seed: 1 });
     viaSampled.command(launchCommand());
-    const sampledResult = viaSampled.stepSampled(10, () => {});
+    const sampledResult = viaSampled.stepSampled({
+      ticks: 10,
+      level: wrapAsLevel({ scenario: scenario(), seed: 1 }),
+      cache: createObservedCache(),
+      onTick: () => {},
+    });
 
     expect(sampledResult).toEqual(stepResult);
     expect(viaSampled.hash()).toBe(viaStep.hash());
@@ -170,7 +198,12 @@ describe('createDebugSession', () => {
     session.command(launchCommand());
 
     const samples: { x: number; y: number }[][] = [];
-    session.stepSampled(3, (positions) => samples.push([...positions]));
+    session.stepSampled({
+      ticks: 3,
+      level: wrapAsLevel({ scenario: scenario(), seed: 1 }),
+      cache: createObservedCache(),
+      onTick: (positions) => samples.push([...positions]),
+    });
 
     expect(samples).toHaveLength(3);
     for (const sample of samples) expect(sample).toHaveLength(1); // the one launched probe
@@ -184,13 +217,18 @@ describe('createDebugSession', () => {
     session.command(launchCommand());
 
     const ticks: { tick: number; objects: number; contacts: number }[] = [];
-    session.stepSampled(3, (_positions, sample) => {
-      ticks.push({
-        tick: sample.tick,
-        objects: sample.objects.length,
-        contacts: sample.contacts.length,
-      });
-      expect(sample.contactPositions).toEqual([]);
+    session.stepSampled({
+      ticks: 3,
+      level: wrapAsLevel({ scenario: scenario(), seed: 1 }),
+      cache: createObservedCache(),
+      onTick: (_positions, sample) => {
+        ticks.push({
+          tick: sample.tick,
+          objects: sample.objects.length,
+          contacts: sample.contacts.length,
+        });
+        expect(sample.contactPositions).toEqual([]);
+      },
     });
 
     expect(ticks).toEqual([
@@ -207,20 +245,25 @@ describe('createDebugSession', () => {
     for (const command of golden.log) session.command(command);
 
     let sawImpact = false;
-    session.stepSampled(golden.ticks, (_positions, sample) => {
-      const object = sample.objects[0];
-      if (!object) return;
-      expect(object.burning).toBe(false); // the golden's log has no burn node, only a launch
-      // hitContact latches once set (an expended object never moves again), so only the first
-      // sample where it appears is "the" impact tick -- every later sample would repeat it.
-      if (object.hitContact !== -1 && !sawImpact) {
-        sawImpact = true;
-        expect(sample.contacts[object.hitContact]!.cleared).toBe(true);
-        // stepTick records impactTick at the pre-increment tick (sim.ts's advance: step, then
-        // increment); sample.tick is read post-increment, matching trails.ts's own convention.
-        expect(sample.contacts[object.hitContact]!.impactTick).toBe(sample.tick - 1);
-        expect(sample.contactPositions).toHaveLength(1);
-      }
+    session.stepSampled({
+      ticks: golden.ticks,
+      level: wrapAsLevel({ scenario: golden.scenario, seed: golden.seed }),
+      cache: createObservedCache(),
+      onTick: (_positions, sample) => {
+        const object = sample.objects[0];
+        if (!object) return;
+        expect(object.burning).toBe(false); // the golden's log has no burn node, only a launch
+        // hitContact latches once set (an expended object never moves again), so only the first
+        // sample where it appears is "the" impact tick -- every later sample would repeat it.
+        if (object.hitContact !== -1 && !sawImpact) {
+          sawImpact = true;
+          expect(sample.contacts[object.hitContact]!.cleared).toBe(true);
+          // stepTick records impactTick at the pre-increment tick (sim.ts's advance: step, then
+          // increment); sample.tick is read post-increment, matching trails.ts's own convention.
+          expect(sample.contacts[object.hitContact]!.impactTick).toBe(sample.tick - 1);
+          expect(sample.contactPositions).toHaveLength(1);
+        }
+      },
     });
 
     expect(sawImpact).toBe(true);
@@ -238,7 +281,7 @@ describe('createDebugSession', () => {
       bodyClasses: [],
       names: { bodies: [], rails: [], contacts: [] },
     };
-    expect(() => session.captureFrame(emptyLevel)).toThrow();
+    expect(() => session.captureFrame(emptyLevel, [])).toThrow();
   });
 
   test('captureFrame reflects the loaded scenario', () => {
@@ -252,7 +295,7 @@ describe('createDebugSession', () => {
       names: { bodies: ['Origin'], rails: [], contacts: [] },
     };
 
-    const frame = session.captureFrame(level);
+    const frame = session.captureFrame(level, []);
 
     expect(frame.tick).toBe(0);
     expect(frame.bodies).toHaveLength(1);

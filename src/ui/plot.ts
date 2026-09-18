@@ -162,6 +162,7 @@ export function createPlotController({
   refs,
   getFrame,
   getTrails,
+  getPredictedTails,
   getSelection,
   getPlanner,
   onSelect,
@@ -172,6 +173,10 @@ export function createPlotController({
   refs: PlotRefs;
   getFrame: () => Frame;
   getTrails: () => ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** Every object's dotted predicted tail (GRV-0030, src/app/observed.ts) -- optional, like
+   *  `getSelection`/`getPlanner`: a caller with nothing to show (a headless contact sheet with no
+   *  telemetry state) simply omits it. */
+  getPredictedTails?: () => ReadonlyMap<number, readonly { x: number; y: number }[]>;
   /** The app's current selection (src/app/selection.ts), read fresh on every render -- the
    *  controller only ever draws the ring, it never picks or owns the selection itself. */
   getSelection?: () => PlotSelection | null;
@@ -246,6 +251,7 @@ export function createPlotController({
       view: activeView,
       frame,
       trails: getTrails(),
+      predictedTails: getPredictedTails?.(),
       canvasWidth: refs.canvas.width,
       canvasHeight: refs.canvas.height,
       selection: getSelection?.() ?? null,

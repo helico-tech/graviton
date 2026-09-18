@@ -134,7 +134,7 @@ describe('pickAt', () => {
       bodies: [frameBody({ x: 10, y: 0 })],
       rails: [{ id: 'r', name: 'R', x: 10, y: 0, ux: 1, uy: 0 }],
       contacts: [{ id: 'c', name: 'C', x: 10, y: 0, cleared: false }],
-      objects: [{ x: 10, y: 0, vx: 0, vy: 0, expended: false }],
+      objects: [{ x: 10, y: 0, vx: 0, vy: 0, expended: false, observed: true }],
     });
     const result = pickAt({
       frame,
@@ -150,7 +150,7 @@ describe('pickAt', () => {
   test('a near-tie within 1 px still favours the higher-priority kind', () => {
     const frame = baseFrame({
       rails: [{ id: 'r', name: 'R', x: 10, y: 0, ux: 1, uy: 0 }],
-      objects: [{ x: 10.5, y: 0, vx: 0, vy: 0, expended: false }], // 0.5 px farther than the rail
+      objects: [{ x: 10.5, y: 0, vx: 0, vy: 0, expended: false, observed: true }], // 0.5 px farther than the rail
     });
     const result = pickAt({
       frame,
@@ -166,7 +166,7 @@ describe('pickAt', () => {
   test('outside the 1 px tie band, the strictly nearer candidate wins regardless of priority', () => {
     const frame = baseFrame({
       rails: [{ id: 'r', name: 'R', x: 10, y: 0, ux: 1, uy: 0 }],
-      objects: [{ x: 15, y: 0, vx: 0, vy: 0, expended: false }], // 5 px farther than the rail
+      objects: [{ x: 15, y: 0, vx: 0, vy: 0, expended: false, observed: true }], // 5 px farther than the rail
     });
     const result = pickAt({
       frame,

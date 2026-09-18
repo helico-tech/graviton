@@ -7,9 +7,12 @@
 import { contactPoint } from '../sim/contacts.ts';
 import { evaluateEphemeris, surfacePhase } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
+import { C, uplinkArrival } from '../sim/lightcone.ts';
 import { dlog } from '../sim/math/kernels.ts';
+import { postPositionAtTime } from '../sim/post.ts';
 import { NEVER_LAUNCHED, railGeometry } from '../sim/rails.ts';
 import type { Sim } from '../sim/sim.ts';
+import { observedState } from '../sim/telemetry.ts';
 import { worldToScreen } from '../render/camera.ts';
 import type { View } from '../render/camera.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
@@ -80,7 +83,11 @@ export function pickAt({
   frame.bodies.forEach((body, index) => consider('body', index, body.x, body.y));
   frame.rails.forEach((rail, index) => consider('rail', index, rail.x, rail.y));
   frame.contacts.forEach((contact, index) => consider('contact', index, contact.x, contact.y));
-  frame.objects.forEach((object, index) => consider('probe', index, object.x, object.y));
+  frame.objects.forEach((object, index) => {
+    // Nothing is drawn for an unobserved object (GRV-0030, frame.ts's own doc) -- there is
+    // nothing on the plot at (0, 0) for that index to click.
+    if (object.observed) consider('probe', index, object.x, object.y);
+  });
   if (candidates.length === 0) return null;
 
   let nearest = candidates[0]!;
@@ -282,6 +289,11 @@ function describeProbe({
           ? 'BURNING'
           : 'FLYING';
 
+  // GRV-0030, ADR-0007 §5: the age of the post's own last observation -- exactly the observation's
+  // own one-way delay, since staleness at "now" and delay-to-observe are the same quantity for a
+  // probe (delayToSelection below reads this same value for the status bar's DELAY).
+  const observed = observedState({ sim, object: index, atTick: sim.tick });
+
   return [
     { key: 'mass', label: 'MASS', value: formatKilograms(mass) },
     { key: 'propellant', label: 'PROPELLANT', value: formatKilograms(mass - dryMass) },
@@ -297,7 +309,64 @@ function describeProbe({
       value: Number.isFinite(nearestRange) ? formatKilometres(nearestRange) : DASH,
     },
     { key: 'state', label: 'STATE', value: state },
+    {
+      key: 'observed',
+      label: 'OBSERVED',
+      value: observed ? formatDuration(observed.delaySeconds) : DASH,
+    },
   ];
+}
+
+/** One-way delay to `selection`, in seconds (GAME-0002 §8's status bar `DELAY`, "the four numbers
+ *  that never move"): a probe's own last observation (telemetry.ts), the uplink delay to a rail's
+ *  host (sim/lightcone.ts's own `uplinkArrival`, "an order sent now"), a straight-line geometric
+ *  estimate for a contact (ADR-0007 §1's post/rail treatment doesn't cover contacts -- they carry
+ *  no history ring to downlink from, and no command is ever *sent* to one, so there is no light-
+ *  cone tick to solve for the way there is for a rail; a contact's ephemeris is fully deterministic
+ *  the same way a rail's is, so the geometric distance-over-`C` this reduces to is exact to within
+ *  the same rounding a Newton-refined solve would give, since -- unlike a probe -- nothing about a
+ *  contact needs predicting), or `null` for a body (rule 12: bodies carry no delay at all). */
+export function delayToSelection({
+  sim,
+  selection,
+}: {
+  sim: Sim;
+  selection: Selection;
+}): number | null {
+  if (!selection) return null;
+  const dt = sim.scenario.dt;
+  switch (selection.kind) {
+    case 'body':
+      return null;
+    case 'rail': {
+      if (selection.index < 0 || selection.index >= sim.rails.count) return null;
+      const arrivalTick = uplinkArrival({
+        sim,
+        target: { kind: 'rail', rail: selection.index },
+        issueTick: sim.tick,
+      });
+      return (arrivalTick - sim.tick) * dt;
+    }
+    case 'contact': {
+      if (selection.index < 0 || selection.index >= sim.contacts.count) return null;
+      const t = sim.tick * dt;
+      const eph = makeEph(sim.bodies.count);
+      evaluateEphemeris(sim.bodies, t, eph);
+      const point = contactPoint({
+        bodies: sim.bodies,
+        contacts: sim.contacts,
+        contact: selection.index,
+        t,
+        eph,
+      });
+      const post = postPositionAtTime({ sim, t });
+      return Math.hypot(point.x - post.x, point.y - post.y) / C;
+    }
+    case 'probe': {
+      const observed = observedState({ sim, object: selection.index, atTick: sim.tick });
+      return observed ? observed.delaySeconds : null;
+    }
+  }
 }
 
 /** Every field on the selection panel, computed straight from `sim` (objects, contactState,
