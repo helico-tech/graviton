@@ -77,9 +77,11 @@ describe('scenario validation', () => {
     ['capacity', -1],
     ['capacity', 1.5],
     ['capacity', NaN],
+    ['capacity', 4097], // docs/issues/2026-09-18-probe-count-unbounded.md
     ['burnNodeCapacity', -1],
     ['burnNodeCapacity', 1.5],
     ['burnNodeCapacity', NaN],
+    ['burnNodeCapacity', 4097],
   ])('createSim and deserializeSim throw when scenario.%s is %p', (field, value) => {
     const invalid = scenario({ [field]: value });
     expect(() => createSim({ scenario: invalid, seed: 1 })).toThrow();
@@ -122,6 +124,11 @@ describe('scenario validation', () => {
   test('accepts a valid scenario', () => {
     expect(() => createSim({ scenario: VALID_SCENARIO, seed: 1 })).not.toThrow();
     expect(() => deserializeSim({ scenario: VALID_SCENARIO, bytes: VALID_BYTES })).not.toThrow();
+  });
+
+  test('accepts capacity and burnNodeCapacity at the boundary (4096)', () => {
+    const atLimit = scenario({ capacity: 4096, burnNodeCapacity: 4096 });
+    expect(() => createSim({ scenario: atLimit, seed: 1 })).not.toThrow();
   });
 });
 

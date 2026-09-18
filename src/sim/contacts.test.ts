@@ -55,6 +55,10 @@ describe('createContactTable validation', () => {
     ['host', 1.5],
     ['longitude', NaN],
     ['longitude', Infinity],
+    // docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md: [-2pi, 2pi] is the accepted
+    // range (both endpoints included), independent of the compiler's own [0, 2pi) normalisation.
+    ['longitude', 2 * Math.PI + 1e-9],
+    ['longitude', -2 * Math.PI - 1e-9],
     ['captureRadius', 0],
     ['captureRadius', -1],
     ['captureRadius', NaN],
@@ -62,6 +66,31 @@ describe('createContactTable validation', () => {
     ['minimumImpactEnergy', NaN],
   ])('throws when a contact has %s = %p', (field, value) => {
     expect(() => createContactTable([{ ...contact, [field]: value }], bodies)).toThrow();
+  });
+});
+
+describe('createContactTable validation: longitude boundary', () => {
+  test('accepts longitude at the +-2pi boundary', () => {
+    const sun: BodyDef = {
+      parent: -1,
+      mu: MU_SUN,
+      radius: 6.957e8,
+      rotationPeriod: 2.2e6,
+      axialPhaseAtEpoch: 0,
+    };
+    const bodies = createBodyTable([sun]);
+    expect(() =>
+      createContactTable(
+        [{ host: 0, longitude: 2 * Math.PI, captureRadius: 40000, minimumImpactEnergy: 0 }],
+        bodies,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      createContactTable(
+        [{ host: 0, longitude: -2 * Math.PI, captureRadius: 40000, minimumImpactEnergy: 0 }],
+        bodies,
+      ),
+    ).not.toThrow();
   });
 });
 

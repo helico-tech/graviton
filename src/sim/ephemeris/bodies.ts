@@ -94,9 +94,12 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
       throw new Error(
         `createBodyTable: body ${i} has non-positive or non-finite rotationPeriod (${def.rotationPeriod})`,
       );
-    if (!Number.isFinite(def.axialPhaseAtEpoch))
+    // docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md: [-2pi, 2pi] is the accepted
+    // range (both endpoints included), independent of the compiler's own [0, 2pi) normalisation
+    // -- a body table built directly (not through compile.ts) gets the same protection.
+    if (!Number.isFinite(def.axialPhaseAtEpoch) || Math.abs(def.axialPhaseAtEpoch) > TWO_PI)
       throw new Error(
-        `createBodyTable: body ${i} has non-finite axialPhaseAtEpoch (${def.axialPhaseAtEpoch})`,
+        `createBodyTable: body ${i} has axialPhaseAtEpoch (${def.axialPhaseAtEpoch}) outside [-2pi, 2pi]`,
       );
     table.rotationPeriod[i] = def.rotationPeriod;
     table.axialPhaseAtEpoch[i] = def.axialPhaseAtEpoch;
@@ -126,13 +129,13 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
       throw new Error(
         `createBodyTable: body ${i} has non-positive or non-finite semi-major axis (${def.a})`,
       );
-    if (!Number.isFinite(def.argPeriapsis))
+    if (!Number.isFinite(def.argPeriapsis) || Math.abs(def.argPeriapsis) > TWO_PI)
       throw new Error(
-        `createBodyTable: body ${i} has non-finite argPeriapsis (${def.argPeriapsis})`,
+        `createBodyTable: body ${i} has argPeriapsis (${def.argPeriapsis}) outside [-2pi, 2pi]`,
       );
-    if (!Number.isFinite(def.meanAnomaly0))
+    if (!Number.isFinite(def.meanAnomaly0) || Math.abs(def.meanAnomaly0) > TWO_PI)
       throw new Error(
-        `createBodyTable: body ${i} has non-finite meanAnomaly0 (${def.meanAnomaly0})`,
+        `createBodyTable: body ${i} has meanAnomaly0 (${def.meanAnomaly0}) outside [-2pi, 2pi]`,
       );
 
     table.parent[i] = def.parent;
