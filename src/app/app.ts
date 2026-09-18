@@ -48,7 +48,7 @@ import type { WarpRung } from './warp.ts';
 import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
-import { planToCommands, validatePlan } from '../planner/plan.ts';
+import { planToCommands } from '../planner/plan.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import type { Ghost } from '../planner/ghost.ts';
 import { solutionReadout } from '../planner/readout.ts';
@@ -203,20 +203,25 @@ export interface App {
    *  draft's ghost would do. `null` without a draft or a ghost (an infeasible launch draws no
    *  ghost -- see `planIssues`). */
   planSolution(): SolutionReadout | null;
-  /** validatePlan's own issues (plan.ts: node budget, sortedness, integer-ness) plus, if the
-   *  draft's launch is currently infeasible, a human-readable line naming checkLaunch's own
-   *  rejection reason -- the PLAN panel's Commit button reads this to decide whether it is
+  /** Every reason the current draft integrates to no ghost (`reintegrate`'s own `issues`, src/
+   *  app/planner.ts, GRV-0028): validatePlan's own shape issues (plan.ts: node budget,
+   *  sortedness, integer-ness, a node no longer later than the launch), checked before the draft
+   *  ever reaches the sim, or, if the shape is fine, a human-readable line naming checkLaunch's
+   *  own rejection reason -- the PLAN panel's Commit button reads this to decide whether it is
    *  disabled and why (design note). `[]` when the draft is valid or there is none. */
   planIssues(): string[];
   /** `null` is "the present"; otherwise the tick `frame()` reads bodies/rails/contacts at (GAME-
    *  0001 §4.6 "horizon scrub"). Nothing in the simulation moves because of this. */
   setHorizon(tick: number | null): void;
   horizon(): number | null;
-  /** Appends `planToCommands` (plan.ts) to the session log at the draft's own (already-future)
-   *  launch tick and clears the draft (design note). Throws if there is no draft or it is
-   *  currently invalid (`planIssues()` non-empty) -- mirrors `warpTo`'s own throw-on-misuse style
-   *  rather than silently doing nothing. */
-  commitPlan(): void;
+  /** Re-snaps and revalidates the draft first (`reintegratePlan`, GRV-0028), exactly like every
+   *  other planner mutator, then appends `planToCommands` (plan.ts) to the session log at the
+   *  draft's own (already re-snapped) launch tick and clears it -- what commits is exactly what
+   *  the ghost most recently showed. Never throws: with no draft, or one that is still invalid
+   *  after re-snapping (`planIssues()` non-empty), returns the issues instead of committing
+   *  anything, so a caller (main.ts's Commit handler) can show them rather than let an uncaught
+   *  error reach the console. */
+  commitPlan(): { committed: true } | { committed: false; issues: string[] };
 }
 
 /** A raw `{ scenario, seed }` load (the parity-spec path) carries no compiled level, but the
@@ -638,6 +643,15 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       rung = 1;
     }
 
+    // A draft whose launch tick the clock has now reached or passed is stale (GRV-0028, docs/
+    // issues/2026-09-18-commit-plan-uses-stale-launch-tick.md): step is the one place time
+    // advances, so re-snapping and revalidating it here -- the same reintegrate every other
+    // planner mutator already runs -- keeps the ghost the player sees, and what commit would
+    // actually do with it, from ever lagging behind the clock while a draft just sits there.
+    if (plannerState.draft && plannerState.draft.launchTick <= session.state().tick) {
+      reintegratePlan();
+    }
+
     emit();
     return session.state();
   }
@@ -688,25 +702,41 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     });
   }
 
+  /** `reintegrate`'s own `issues` (src/app/planner.ts, GRV-0028): validatePlan's shape issues, or
+   *  a human-readable line naming checkLaunch's own rejection -- computed there, alongside the
+   *  ghost, rather than re-derived here (rule 11: one source of truth per displayed number). */
   function planIssues(): string[] {
-    if (!plannerState.draft || !currentLevel) return [];
-    const issues = validatePlan({ plan: plannerState.draft, level: currentLevel });
-    if (plannerState.launchRejection)
-      issues.push(`launch rejected: ${plannerState.launchRejection}`);
-    return issues;
+    return [...plannerState.issues];
   }
 
-  function commitPlan(): void {
-    const draft = plannerState.draft;
-    if (!draft) throw new Error('app: commitPlan called with no draft');
+  /** Re-snaps and revalidates the draft first (`reintegratePlan`, same as every other planner
+   *  mutator -- GRV-0028, docs/issues/2026-09-18-commit-plan-uses-stale-launch-tick.md): a draft
+   *  left alone while time ran could otherwise still carry a launch tick the clock has already
+   *  passed, and committing it as-is threw straight out of the session's own command validation,
+   *  uncaught, while the Commit button stayed enabled. Never throws -- any remaining issue (the
+   *  shape, the launch, or simply no draft at all) is returned instead, so the caller (main.ts's
+   *  Commit handler) can show it in the PLAN panel rather than the console. What actually commits
+   *  is `commands` built from the *exact* draft `reintegratePlan` just integrated -- what the
+   *  ghost most recently showed is what launches (the "ghost invariant"). */
+  function commitPlan(): { committed: true } | { committed: false; issues: string[] } {
+    reintegratePlan();
     const issues = planIssues();
-    if (issues.length > 0)
-      throw new Error(`app: commitPlan called on an invalid draft (${issues.join('; ')})`);
+    if (issues.length > 0) {
+      emit();
+      return { committed: false, issues };
+    }
+
+    const draft = plannerState.draft;
+    if (!draft) {
+      emit();
+      return { committed: false, issues: ['no draft to commit'] };
+    }
 
     const probeIndex = session.state().count;
     for (const command of planToCommands({ plan: draft, probeIndex })) session.command(command);
     plannerState = plannerDiscardDraft(plannerState);
     emit();
+    return { committed: true };
   }
 
   return {
@@ -789,6 +819,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     },
     endDrag: () => {
       plannerState = plannerEndDrag(plannerState);
+      reintegratePlan();
       emit();
     },
     selectNode: (index) => {

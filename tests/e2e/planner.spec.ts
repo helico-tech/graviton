@@ -156,7 +156,7 @@ test('setPlan with level 01s committed solution reproduces its own recorded outc
   expect(gate.violations()).toEqual([]);
 });
 
-test('commit appends the plan to the log; warping to impact clears the contact and expends the probe', async ({
+test('ghost invariant: plan, let time pass, commit, then warping to the predicted impact matches it exactly (GRV-0028)', async ({
   page,
 }) => {
   const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
@@ -171,16 +171,62 @@ test('commit appends the plan to the log; warping to impact clears the contact a
     speed: l01Launch.speed,
     nodes: [],
   });
-  await page.evaluate(() => window.graviton!.commitPlan());
+
+  // The panel's own predicted impact tick, read *before* committing -- what actually happens
+  // after commit must match this exactly (docs/issues/2026-09-18-commit-plan-uses-stale-launch-
+  // tick.md's own goal: "what the player commits is what the ghost showed").
+  const readout = await page.evaluate(() => window.graviton!.solution());
+  expect(readout).not.toBeNull();
+  expect(readout!.contacts[0]!.impactTick).not.toBeUndefined();
+  const prediction: number = readout!.contacts[0]!.impactTick!;
+  expect(prediction).toBe(l01Evidence.contacts[0]!.impactTick);
+
+  // Time runs before the player commits -- the draft's own launch tick (2464) is still far ahead
+  // of tick 50, so this never forces a re-snap; it exercises the general "some time has passed"
+  // case the ghost invariant must hold under regardless.
+  await page.evaluate(() => window.graviton!.step(50));
+
+  const result = await page.evaluate(() => window.graviton!.commitPlan());
+  expect(result).toEqual({ committed: true });
   expect(await page.evaluate(() => window.graviton!.plan())).toBeNull();
 
-  const impactTick = l01Evidence.contacts[0]!.impactTick;
-  await page.evaluate((tick) => window.graviton!.warpTo(tick + 1), impactTick);
+  await page.evaluate((tick) => window.graviton!.warpTo(tick + 1), prediction);
 
   const state = await page.evaluate(() => window.graviton!.state());
   expect(state.contacts[0]!.cleared).toBe(1);
-  expect(state.contacts[0]!.impactTick).toBe(impactTick);
+  expect(state.contacts[0]!.impactTick).toBe(prediction);
   expect(state.objects[0]!.hitContact).toBe(0);
+
+  expect(gate.violations()).toEqual([]);
+});
+
+test('a draft over the level node budget never crashes: the PLAN panel shows why, commit reports the issue instead of throwing (GRV-0028, docs/issues/2026-09-18-reintegrate-skips-validate-plan.md)', async ({
+  page,
+}) => {
+  const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
+
+  await page.goto('/?debug=1');
+  await page.waitForFunction(() => window.graviton?.ready === true);
+
+  await page.evaluate((plan) => window.graviton!.setPlan(plan), {
+    rail: l01Launch.rail,
+    launchTick: l01Launch.tick,
+    heading: l01Launch.heading,
+    speed: l01Launch.speed,
+    // L01-intercept's own node budget is 0 (burnNodeCapacity 0 / capacity 2) -- the exact level
+    // the filed bug reproduced against ("pending burn queue capacity 0 exceeded").
+    nodes: [{ atTick: l01Launch.tick + 10, prograde: 1, lateral: 0 }],
+  });
+
+  expect(await page.evaluate(() => window.graviton!.plan())).not.toBeNull();
+  expect(await page.evaluate(() => window.graviton!.solution())).toBeNull();
+
+  const readouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(readouts['plan.issue']).toContain('budget is 0');
+
+  const result = await page.evaluate(() => window.graviton!.commitPlan());
+  expect(result.committed).toBe(false);
+  expect(await page.evaluate(() => window.graviton!.plan())).not.toBeNull(); // kept, not discarded
 
   expect(gate.violations()).toEqual([]);
 });

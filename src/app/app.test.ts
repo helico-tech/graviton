@@ -7,6 +7,7 @@ import { createApp } from './app.ts';
 import type { App, AppChange } from './app.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
+import type { FlightPlan } from '../planner/plan.ts';
 
 const DT = 60;
 const MU = 3.986004418e14;
@@ -591,5 +592,111 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
 
     expect(app.warpTargetTick()).toBeNull();
     expect(app.state().tick).toBe(5);
+  });
+});
+
+// GRV-0028 review fixes: docs/issues/2026-09-18-commit-plan-uses-stale-launch-tick.md and
+// docs/issues/2026-09-18-reintegrate-skips-validate-plan.md.
+function eastPlan(overrides: Partial<FlightPlan> = {}): FlightPlan {
+  return { rail: 0, launchTick: 1, heading: 0, speed: 8_000_000, nodes: [], ...overrides };
+}
+
+describe('createApp: step re-snaps a stale draft (GRV-0028)', () => {
+  test('a draft whose launch tick the clock reaches is re-snapped to now + 1 and reintegrated', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setPlan(eastPlan());
+    expect(app.plan()!.launchTick).toBe(1);
+
+    app.step(5);
+
+    expect(app.plan()!.launchTick).toBe(6);
+    expect(app.ghost()).not.toBeNull();
+    expect(app.planIssues()).toEqual([]);
+  });
+
+  test('a node that ends up before the re-snapped launch tick is reported as an issue, not dropped', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setPlan(eastPlan({ nodes: [{ atTick: 3, prograde: 1, lateral: 0 }] }));
+    expect(app.planIssues()).toEqual([]); // node at 3 is fine against launchTick 1, for now
+
+    app.step(5); // the clock reaches 5; the launch re-snaps to 6, past the node's own atTick (3)
+
+    expect(app.plan()!.launchTick).toBe(6);
+    expect(app.ghost()).toBeNull();
+    expect(app.planIssues()).toEqual(['node 0: atTick (3) must be later than launchTick (6)']);
+  });
+
+  test('a fresh draft well ahead of the clock is left untouched', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setPlan(eastPlan({ launchTick: 100 }));
+
+    app.step(5);
+
+    expect(app.plan()!.launchTick).toBe(100);
+  });
+});
+
+describe('createApp: commitPlan never throws (GRV-0028)', () => {
+  test('a draft left alone while time passes its launch tick still commits, with the re-snapped tick', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setPlan(eastPlan()); // launchTick 1
+
+    app.step(5); // time runs while the draft sits there, well past its own launch tick
+
+    const result = app.commitPlan();
+
+    expect(result).toEqual({ committed: true });
+    expect(app.plan()).toBeNull();
+
+    app.step(2); // reach tick 6, the re-snapped launch tick, for the command to actually apply
+    expect(app.state().count).toBe(1);
+  });
+
+  test('an invalid draft (launch rejected: capacity) returns its issues instead of throwing', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario({ capacity: 1 }), seed: 1 });
+    app.command(launchCommand({ tick: 0 })); // fills the rail's one and only probe slot
+    app.step(1);
+    expect(app.state().count).toBe(1);
+
+    app.setPlan(eastPlan({ launchTick: 2 }));
+    expect(app.planIssues()).toEqual(['launch rejected: capacity']);
+
+    let result: ReturnType<App['commitPlan']> | undefined;
+    expect(() => {
+      result = app.commitPlan();
+    }).not.toThrow();
+
+    expect(result).toEqual({ committed: false, issues: ['launch rejected: capacity'] });
+    expect(app.plan()).not.toBeNull(); // the draft is kept, not silently discarded
+  });
+
+  test('no draft to commit reports an issue rather than throwing', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    const result = app.commitPlan();
+
+    expect(result.committed).toBe(false);
+  });
+});
+
+describe('createApp: endDrag reintegrates too (GRV-0028)', () => {
+  test('ending a drag leaves the ghost/issues consistent with the released draft', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.setPlan(eastPlan());
+    app.step(5); // launchTick snaps to 6
+
+    app.beginLaunchDrag({ rail: 0, worldX: RADIUS, worldY: 0 });
+    app.endDrag(); // released without ever calling updateLaunchDrag -- a click, not a drag
+
+    expect(app.plan()!.launchTick).toBe(6);
+    expect(app.ghost()).not.toBeNull();
+    expect(app.planIssues()).toEqual([]);
   });
 });

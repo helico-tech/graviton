@@ -339,7 +339,7 @@ export interface DebugApiDriver {
   // solution log above), and is exposed here as `solution` to match the debug API's own naming.
   plan(): FlightPlan | null;
   setPlan(plan: FlightPlan): void;
-  commitPlan(): void;
+  commitPlan(): { committed: true } | { committed: false; issues: string[] };
   setHorizon(tick: number | null): void;
   planSolution(): SolutionReadout | null;
 }
@@ -389,7 +389,9 @@ export interface DebugApi {
   // -- Planner (GRV-0026, docs/work/GRV-0026-planner-overlay.md's own debug-API list).
   plan(): FlightPlan | null;
   setPlan(plan: FlightPlan): void;
-  commitPlan(): void;
+  /** Never throws (GRV-0028): `{ committed: false, issues }` names whatever remains wrong (the
+   *  plan's own shape, its launch, or simply no draft) instead. */
+  commitPlan(): { committed: true } | { committed: false; issues: string[] };
   setHorizon(tick: number | null): void;
   /** The current draft's ghost solution readout (src/planner/readout.ts) -- `null` without a
    *  draft, a ghost, or a currently feasible launch. */

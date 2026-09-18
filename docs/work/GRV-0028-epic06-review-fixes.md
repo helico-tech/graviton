@@ -1,9 +1,18 @@
 ---
 id: GRV-0028
 epic: EPIC-06
-status: todo
+status: done
 ---
 # GRV-0028 EPIC-06 review fixes
+
+**Delivered.** `src/app/planner.ts`'s `reintegrate` now runs `validatePlan` against the (possibly
+just re-snapped) draft before it ever reaches `integrateGhost`, exposing every issue on a single
+`PlannerState.issues: readonly string[]` slot (replacing `launchRejection`); `src/app/app.ts`'s
+`step` re-snaps a draft whose launch tick the clock has reached on every advance, `endDrag` also
+reintegrates, and `commitPlan` re-snaps first and never throws (`{ committed: true } | {
+committed: false; issues }`, propagated through `debug-api.ts`); `src/render/ghost.ts`'s new pure
+`plannerLabels` drops a closest-approach label within 8 screen px of a same-contact impact. See
+`docs/evidence/GRV-0028/README.md`.
 
 Post-epic review findings: `2026-09-18-commit-plan-uses-stale-launch-tick.md` (P1),
 `2026-09-18-reintegrate-skips-validate-plan.md` (P1), `2026-09-18-plot-event-labels-overlap-at-impact.md` (P2).
