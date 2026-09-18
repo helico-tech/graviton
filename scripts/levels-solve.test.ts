@@ -26,28 +26,39 @@ afterEach(() => {
   fs.rmSync(levelsDir, { recursive: true, force: true });
 });
 
-test('without --write, nothing is written', () => {
-  const result = runLevelsSolve({ levelsDir, id: FIXTURE_ID, write: false, ...SOLVE_OPTIONS });
+// A real solve takes ~4 s here and more on CI runners; vitest's default is 5 s.
+const SOLVE_TIMEOUT_MS = 120_000;
 
-  expect(result.ok).toBe(true);
-  expect(fs.existsSync(path.join(levelsDir, `${FIXTURE_ID}.solution.json`))).toBe(false);
-  expect(fs.existsSync(path.join(levelsDir, `${FIXTURE_ID}.evidence.json`))).toBe(false);
-});
+test(
+  'without --write, nothing is written',
+  () => {
+    const result = runLevelsSolve({ levelsDir, id: FIXTURE_ID, write: false, ...SOLVE_OPTIONS });
 
-test('--write writes both the solution and the regenerated evidence', () => {
-  const result = runLevelsSolve({ levelsDir, id: FIXTURE_ID, write: true, ...SOLVE_OPTIONS });
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(path.join(levelsDir, `${FIXTURE_ID}.solution.json`))).toBe(false);
+    expect(fs.existsSync(path.join(levelsDir, `${FIXTURE_ID}.evidence.json`))).toBe(false);
+  },
+  SOLVE_TIMEOUT_MS,
+);
 
-  expect(result.ok).toBe(true);
-  const solutionPath = path.join(levelsDir, `${FIXTURE_ID}.solution.json`);
-  const evidencePath = path.join(levelsDir, `${FIXTURE_ID}.evidence.json`);
-  expect(fs.existsSync(solutionPath)).toBe(true);
-  expect(fs.existsSync(evidencePath)).toBe(true);
+test(
+  '--write writes both the solution and the regenerated evidence',
+  () => {
+    const result = runLevelsSolve({ levelsDir, id: FIXTURE_ID, write: true, ...SOLVE_OPTIONS });
 
-  const solution = JSON.parse(fs.readFileSync(solutionPath, 'utf8'));
-  expect(solution.level).toBe(FIXTURE_ID);
-  const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
-  expect(evidence.outcome.contactsCleared).toBe(evidence.outcome.contactsTotal);
-});
+    expect(result.ok).toBe(true);
+    const solutionPath = path.join(levelsDir, `${FIXTURE_ID}.solution.json`);
+    const evidencePath = path.join(levelsDir, `${FIXTURE_ID}.evidence.json`);
+    expect(fs.existsSync(solutionPath)).toBe(true);
+    expect(fs.existsSync(evidencePath)).toBe(true);
+
+    const solution = JSON.parse(fs.readFileSync(solutionPath, 'utf8'));
+    expect(solution.level).toBe(FIXTURE_ID);
+    const evidence = JSON.parse(fs.readFileSync(evidencePath, 'utf8'));
+    expect(evidence.outcome.contactsCleared).toBe(evidence.outcome.contactsTotal);
+  },
+  SOLVE_TIMEOUT_MS,
+);
 
 test('a level with no level.json file fails cleanly', () => {
   const result = runLevelsSolve({ levelsDir, id: 'does-not-exist', write: false });
