@@ -1,0 +1,212 @@
+/* GAME-0002 (Graviton visual language): a deep-space traffic-control console, not a website.
+   Palette (§2) as custom properties, type scale (§3) applied per role below. Panels never
+   animate and values change instantly (§9) -- the only exception, the warp label's ease, lives in
+   main.ts as a text-content override, not a CSS transition. */
+
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/barlow-condensed/500.css';
+@import '@fontsource/barlow-condensed/600.css';
+
+:root {
+  --ground: #05070a;
+  --panel: #0b0f14;
+  --panel-raised: #111820;
+  --hairline: #1a2530;
+  --grid-minor: #111a22;
+  --grid-major: #1c2a36;
+  --text-primary: #e8f0f4;
+  --text-secondary: #6c818e;
+  --text-disabled: #3a4954;
+  --known: #7fd4e8;
+  --known-dim: #3e7a8a;
+  --unverified: #e8a33d;
+  --unverified-dim: #8a6224;
+  --alarm: #e85d4d;
+  --confirmed-good: #7fe8a8;
+
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-condensed: 'Barlow Condensed', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--ground);
+}
+
+body {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+#app {
+  height: 100%;
+}
+
+.shell {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: 1fr 280px;
+  grid-template-areas:
+    'status status'
+    'plot selection'
+    'timeline timeline';
+  height: 100%;
+  gap: 1px;
+  background: var(--hairline);
+}
+
+.status-bar {
+  grid-area: status;
+  display: flex;
+  gap: 28px;
+  align-items: baseline;
+  padding: 10px 16px;
+  background: var(--panel);
+}
+
+.status-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.field-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.value {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.plot-region {
+  grid-area: plot;
+  position: relative;
+  background: var(--ground);
+  overflow: hidden;
+}
+
+.plot-region canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.plot-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  background: var(--ground);
+  color: var(--alarm);
+  text-align: center;
+}
+
+.plot-error-title {
+  margin: 0;
+  font-family: var(--font-condensed);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plot-error-list {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* The level brief (GAME-0001 §3's "one paragraph" core-loop step), body text over a corner of
+   the plot region -- there is no fifth region for it in GAME-0002 §8's layout, and the plot has
+   nothing else drawn this unit. pointer-events: none so it never blocks GRV-0022's pan/zoom. */
+.plot-brief {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  max-width: 40ch;
+  pointer-events: none;
+}
+
+.plot-brief-name {
+  margin: 0 0 4px;
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.plot-brief-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.selection-panel,
+.timeline-strip {
+  background: var(--panel);
+  padding: 10px 14px;
+}
+
+.selection-panel {
+  grid-area: selection;
+  overflow: auto;
+}
+
+.timeline-strip {
+  grid-area: timeline;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.panel-header {
+  margin: 0 0 8px;
+  font-family: var(--font-condensed);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.timeline-strip .panel-header {
+  margin: 0;
+}
+
+.placeholder {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-disabled);
+}
+
+.build-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-disabled);
+}
