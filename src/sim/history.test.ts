@@ -65,6 +65,19 @@ describe('recordHistory / firstAvailableTick', () => {
     recordHistory({ history: h, object: 0, tick: 0, x: 0, y: 0, vx: 0, vy: 0 });
     expect(() => sampleState({ history: h, object: 0, t: 5 * DT, dt: DT })).toThrow();
   });
+
+  // GRV-0030, docs/issues/2026-09-18-downlink-emission-throws-at-current-tick.md: `t` landing
+  // exactly on the most recently recorded tick used to throw here even though it needs no "next"
+  // sample -- cubic Hermite at s=0 depends only on the t0 endpoint (h01/h11 are both 0 there), and
+  // `sim.ts`'s `advance` always leaves `history.lastTick[object] === sim.tick`, so this is not a
+  // corner case: it is what every "what do we see right now" query looks like.
+  test('sampleState at exactly the last recorded tick returns that sample, without needing a later one', () => {
+    const h = createHistoryBuffer({ objectCapacity: 1, historyTicks: 8 });
+    recordHistory({ history: h, object: 0, tick: 5, x: 10, y: 20, vx: 3, vy: -4 });
+    recordHistory({ history: h, object: 0, tick: 6, x: 13, y: 16, vx: 3, vy: -4 });
+    const s = sampleState({ history: h, object: 0, t: 6 * DT, dt: DT });
+    expect(s).toEqual({ x: 13, y: 16, vx: 3, vy: -4 });
+  });
 });
 
 describe('sampleState: cubic Hermite interpolation', () => {

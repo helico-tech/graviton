@@ -121,4 +121,9 @@ export const LINE_STYLES = {
   orbit: { dash: [6, 4], color: KNOWN_DIM },
   trail: { dash: [], color: KNOWN },
   ghost: { dash: [3, 3], color: KNOWN },
+  // GRV-0030, GAME-0002 §4 "Dotted, fading tail | Extrapolated from a stale observation": the
+  // predicted stretch from an object's last observation to the predicted present -- amber, like
+  // every other "unverified, extrapolated" reading (the observation itself is solid KNOWN; only
+  // what's beyond it is a prediction the post hasn't confirmed).
+  predicted: { dash: [1, 4], color: UNVERIFIED },
 } as const;

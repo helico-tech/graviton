@@ -30,6 +30,16 @@ function loadFixture(): CompiledLevel {
   ) as CompiledLevel;
 }
 
+/** GRV-0030's own fixture: a post ten light-minutes from its rail (~20 ticks at dt=30s each way)
+ *  -- the first level whose post is genuinely offset from its rail, which is what exposed
+ *  evaluateLaunch's own issue-vs-arrival bug (docs/issues/2026-09-18-solve-evaluatelaunch-
+ *  ignores-uplink-delay.md). */
+function loadT01(): CompiledLevel {
+  return JSON.parse(
+    fs.readFileSync(path.join(repoRoot, 'levels', 'T01-far-post.level.json'), 'utf8'),
+  ) as CompiledLevel;
+}
+
 describe('sweptSegmentDistance', () => {
   test('a stationary contact and a probe flying a straight line past it: clamped point-segment distance', () => {
     // Probe flies from (-10, 5) to (10, 5) over the tick; contact sits at the origin. Relative
@@ -279,6 +289,61 @@ describe('evaluateLaunch: against the real compiler fixture', () => {
     expect(result.cleared).toBe(false);
     expect(result.distance).toBeLessThan(1e14); // not a body-hit/reject penalty
     expect(result.distance).toBeGreaterThan(0);
+  });
+});
+
+describe('evaluateLaunch: a post genuinely offset from its rail (T01-far-post, GRV-0030)', () => {
+  // The real, independently-verified command for this level (docs/evidence/GRV-0030/README.md):
+  // issued at tick 11, arrives (materialises) at tick 31, clears the contact at tick 124 --
+  // confirmed by replaying the actual built Command (tick=11, the *issued* tick) through
+  // createSim/advance/checkLaunch directly, bypassing evaluateLaunch entirely. `launchTick` here
+  // is 31 -- the tick the probe should exist at, evaluateLaunch's own contract for the field
+  // (searchRail's window/compass-search all reason about "when does the effect happen", and the
+  // final command solveContact builds already converts this to an issue tick via issueTickFor).
+  const KNOWN_GOOD = {
+    launchTick: 31,
+    headingRad: (215.3125 * Math.PI) / 180,
+    speedMps: 140625,
+  };
+
+  test('agrees with the real replay -- the same candidate that clears for real must clear here too', () => {
+    const level = loadT01();
+    const result = evaluateLaunch({
+      scenario: level.scenario,
+      seed: level.seed,
+      priorLog: [],
+      railIndex: 0,
+      contactIndex: 0,
+      ...KNOWN_GOOD,
+      maxFlightTicks: 200,
+    });
+    expect(result.cleared).toBe(true);
+    expect(result.distance).toBeLessThanOrEqual(0);
+    expect(result.impactTick).toBe(124);
+    // The command evaluateLaunch itself would build must be issued well before `launchTick` --
+    // the whole point of routing through issueTickFor -- not stamped with launchTick directly the
+    // way the pre-fix code did.
+    expect(result.command.tick).toBeLessThan(KNOWN_GOOD.launchTick);
+  });
+
+  test('the probe is never sampled before it exists: a launchTick shorter than the one-way delay cannot fabricate a close miss', () => {
+    const level = loadT01();
+    // Materialisation alone takes ~20 ticks from the earliest possible issue tick (0) -- a
+    // launchTick this early can never actually happen, so the search must see it as a real,
+    // large miss (or a rejection), never a small "probe sampled at the origin" distance the old
+    // per-tick-zero-initialised read could produce.
+    const result = evaluateLaunch({
+      scenario: level.scenario,
+      seed: level.seed,
+      priorLog: [],
+      railIndex: 0,
+      contactIndex: 0,
+      launchTick: 5,
+      headingRad: KNOWN_GOOD.headingRad,
+      speedMps: KNOWN_GOOD.speedMps,
+      maxFlightTicks: 200,
+    });
+    expect(result.cleared).toBe(false);
   });
 });
 

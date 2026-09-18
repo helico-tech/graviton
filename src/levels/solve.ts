@@ -12,7 +12,7 @@ import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { railGeometry } from '../sim/rails.ts';
 import { issueTickFor } from '../sim/lightcone.ts';
 import { contactPoint, NO_IMPACT } from '../sim/contacts.ts';
-import { HEADING_TURN } from '../sim/commands.ts';
+import { HEADING_TURN, launchArrivalTick } from '../sim/commands.ts';
 import { verifyLevel } from './verify.ts';
 import type { LevelSolution } from './verify.ts';
 import type { CompiledLevel } from './compile.ts';
@@ -208,7 +208,18 @@ const RECEDE_MIN_TICKS = 20;
 /** Runs `priorLog` plus one trial launch through the real simulation and reports how close the
  *  launched probe came to `contactIndex` (ADR-0006 §5: "every evaluation runs the real
  *  simulation, never a separate model"). Deterministic and side-effect-free on its inputs -- a
- *  fresh `Sim` is created and advanced, never mutated in place by a caller. */
+ *  fresh `Sim` is created and advanced, never mutated in place by a caller.
+ *
+ *  `launchTick` is the tick the probe should *exist* at (the window/compass-search machinery
+ *  below all reason in "when does the effect happen" terms) -- not necessarily the tick the
+ *  command is *issued* at (ADR-0007 §2): whenever the post is genuinely offset from the rail, the
+ *  command must be issued earlier, exactly the way the real committed log/`planToCommands` does,
+ *  via `issueTickFor` (GRV-0030, docs/issues/2026-09-18-solve-evaluatelaunch-ignores-uplink-
+ *  delay.md -- the pre-fix version stamped `command.tick = launchTick` directly, so for an
+ *  offset post the trial command materialised tens of ticks later than the search assumed, and
+ *  every sample taken before that real materialisation read the probe's still-zero-initialised
+ *  array slot rather than rejecting or waiting). The probe is only ever read once
+ *  `sim.objects.count` shows it actually exists. */
 export function evaluateLaunch({
   scenario,
   seed,
@@ -222,10 +233,18 @@ export function evaluateLaunch({
 }: EvaluateLaunchArgs): EvaluateLaunchResult {
   const heading = quantizeHeading(headingRad);
   const speed = quantizeSpeed(speedMps);
-  const command = { tick: launchTick, kind: 'launch' as const, rail: railIndex, heading, speed };
+
+  // A throwaway Sim is enough to solve the issue tick: a rail's own light cone never depends on
+  // prior state (solveContact's own comment, below), so this never needs `priorLog` replayed.
+  const issueTick = issueTickFor({
+    sim: createSim({ scenario, seed }),
+    target: { kind: 'rail', rail: railIndex },
+    atTick: launchTick,
+  });
+  const command = { tick: issueTick, kind: 'launch' as const, rail: railIndex, heading, speed };
 
   const sim = createSim({ scenario, seed });
-  advance({ sim, log: sortLogByTick(priorLog), ticks: launchTick });
+  advance({ sim, log: sortLogByTick(priorLog), ticks: issueTick });
 
   const rejection = checkLaunch({ sim, command });
   if (rejection !== null) {
@@ -248,11 +267,17 @@ export function evaluateLaunch({
     };
   }
 
+  // The real arrival/materialisation tick -- not necessarily `launchTick` exactly (`issueTickFor`
+  // can land short: an unreachably early request, or a clear window that only opens later), but
+  // `checkLaunch` above already accepted this exact command, so this is the tick it actually
+  // takes effect at.
+  const arrivalTick = launchArrivalTick({ sim, command });
+
   const probeIndex = sim.objects.count;
   const trialLog = sortLogByTick([...priorLog, command]);
   const eph = makeEph(sim.bodies.count);
 
-  const t0 = launchTick * scenario.dt;
+  const t0 = arrivalTick * scenario.dt;
   evaluateEphemeris(sim.bodies, t0, eph);
   let prevContact: Point = contactPoint({
     bodies: sim.bodies,
@@ -276,9 +301,15 @@ export function evaluateLaunch({
   let best = Infinity;
   let recedeStreak = 0;
   const recedeLimit = Math.max(RECEDE_MIN_TICKS, Math.floor(maxFlightTicks * RECEDE_FRACTION));
+  // Ticks spent waiting for materialisation don't count against the flight budget -- maxFlightTicks
+  // is a budget of actual flight time, the same as it always was for a co-located post (where this
+  // is always zero).
+  const preLaunchTicks = arrivalTick - issueTick;
 
-  for (let step = 0; step < maxFlightTicks; step++) {
+  for (let step = 0; step < maxFlightTicks + preLaunchTicks; step++) {
     advance({ sim, log: trialLog, ticks: 1 });
+
+    if (sim.objects.count <= probeIndex) continue; // not materialised yet -- keep waiting
 
     if (sim.objects.hitBody[probeIndex] !== -1) {
       return {
@@ -1050,14 +1081,12 @@ function solveContact({
       evals: totalEvals,
     };
 
-  // The search above evaluates every candidate launch as if issue and effect were the same tick
-  // (evaluateLaunch's own `command.tick = launchTick`) -- exact whenever the post sits on the
-  // rail's own host (ADR-0007 §2, this unit's own levels), the only geometry the solver is asked
-  // to handle (module header: "a mid-course burn is not implemented"). The final command still
-  // goes through `issueTickFor` (ADR-0007 "Consequences": "the solver ... issues a launch at
-  // launchTick - uplink(post->rail)"), so a level whose post is genuinely offset from the rail
-  // still gets a command that arrives at the tick the search actually solved for -- a throwaway
-  // Sim is enough since a rail's own light cone never depends on prior state.
+  // evaluateLaunch's own `bestAttempt` already issued its trial command through issueTickFor
+  // (GRV-0030), so this is re-deriving the identical tick -- kept as its own step (rather than
+  // threading `EvaluateLaunchResult.command` through `SearchRailResult`) so this function stays
+  // the one place that decides what the final command looks like, independent of the search's own
+  // internal result shape. A throwaway Sim is enough since a rail's own light cone never depends
+  // on prior state.
   const solveSim = createSim({ scenario, seed });
   const issueTick = issueTickFor({
     sim: solveSim,

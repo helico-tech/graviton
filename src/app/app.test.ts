@@ -454,7 +454,7 @@ describe('createApp: events (GRV-0027)', () => {
     app.command(launchCommand({ tick: 0 }));
     app.step(1);
 
-    expect(app.events()).toEqual([{ tick: 0, kind: 'launch', probe: 0 }]);
+    expect(app.events()).toEqual([{ tick: 0, arrivalTick: 1, kind: 'launch', probe: 0 }]);
     expect(changes.at(-1)!.status.event).toBe('LAUNCH PRB-01');
   });
 
@@ -464,10 +464,27 @@ describe('createApp: events (GRV-0027)', () => {
     app.loadLevel('L01-intercept');
     app.loadSolution();
 
-    app.warpTo(3299); // one past L01-intercept.evidence.json's own recorded impact tick (3298)
+    // GRV-0030: the impact itself is still at tick 3298 (unchanged physics), but its *telemetry*
+    // doesn't arrive by 3299 any more -- the post (on meskel) sits on the far side of its own host
+    // from the impact site (on yarune) for a while right after impact (meskel's day/night cycle,
+    // ADR-0007 §4's "occlusion turns planets into communications terrain"), confirmed directly
+    // against segmentBlocked/observedState (docs/evidence/GRV-0030/README.md has the numbers).
+    // 3900 is comfortably past where it clears.
+    app.warpTo(3900);
 
-    expect(app.events()).toContainEqual({ tick: 3298, kind: 'impact', probe: 0, contact: 0 });
-    expect(app.events()).toContainEqual({ tick: 3298, kind: 'cleared', contact: 0 });
+    expect(app.events()).toContainEqual({
+      tick: 3298,
+      arrivalTick: expect.any(Number),
+      kind: 'impact',
+      probe: 0,
+      contact: 0,
+    });
+    expect(app.events()).toContainEqual({
+      tick: 3298,
+      arrivalTick: expect.any(Number),
+      kind: 'cleared',
+      contact: 0,
+    });
     expect(changes.at(-1)!.status.event).toBe('IMPACT PRB-01 → DRIFT-HULK');
   });
 
@@ -564,7 +581,7 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
     expect(app.state().tick).toBe(11); // never overshoots
     expect(app.warpTargetTick()).toBeNull();
     expect(app.warpRung()).toBe(1);
-    expect(app.events()).toEqual([{ tick: 10, kind: 'launch', probe: 0 }]);
+    expect(app.events()).toEqual([{ tick: 10, arrivalTick: 11, kind: 'launch', probe: 0 }]);
   });
 
   test('warpToEvent on the real L01 solution reaches launch, then impact, in order, one frame budget at a time', () => {
@@ -575,12 +592,25 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
     drainWarpToEvent(app);
     expect(app.state().tick).toBe(2465); // one past the solution's own launch tick (2464)
     expect(app.warpRung()).toBe(1);
-    expect(app.events()).toEqual([{ tick: 2464, kind: 'launch', probe: 0 }]);
+    expect(app.events()).toEqual([{ tick: 2464, arrivalTick: 2465, kind: 'launch', probe: 0 }]);
 
+    // nextEventTick()'s own prediction (predict.ts, unchanged by GRV-0030 -- "closest approach
+    // stays a prediction event") still targets the *true* impact tick (3298), so the warp lands
+    // right on it -- but the post's own telemetry of it hasn't arrived yet (the same meskel
+    // day/night occlusion the events test above documents), so the event itself isn't in the log
+    // until later; warping on confirms it landed once telemetry actually catches up.
     drainWarpToEvent(app);
     expect(app.state().tick).toBe(3299); // one past the recorded impact tick (3298)
     expect(app.warpRung()).toBe(1);
-    expect(app.events()).toContainEqual({ tick: 3298, kind: 'impact', probe: 0, contact: 0 });
+
+    app.warpTo(3900);
+    expect(app.events()).toContainEqual({
+      tick: 3298,
+      arrivalTick: expect.any(Number),
+      kind: 'impact',
+      probe: 0,
+      contact: 0,
+    });
   });
 
   test('an explicit warpTo cancels an in-flight warpToEvent target', () => {

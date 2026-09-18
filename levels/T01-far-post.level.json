@@ -1,0 +1,103 @@
+{
+  "bodyClasses": [
+    "star",
+    "rock",
+    "ice"
+  ],
+  "bodyIds": [
+    "vantar",
+    "rethis",
+    "rethis-shard"
+  ],
+  "brief": "Vantar Post sits ten light-minutes from Rethis and everything orbiting it. A derelict hulk rides Rethis itself; Rethis Shard, a small moon, carries the only rail in range. Every order you send takes ten minutes to arrive, and everything you see already happened ten minutes ago -- plan the launch, commit it, and clear the hulk before the window closes.",
+  "contactIds": [
+    "relay-hulk"
+  ],
+  "debrief": "The order left the post before the probe fired, and the confirmation reached you after it did. Nothing you saw while the probe was in flight was the probe as it actually was -- it was the probe as it had been, ten minutes earlier. That gap never closes, no matter how fast the probe flies.",
+  "id": "T01-far-post",
+  "name": "Far Post",
+  "names": {
+    "bodies": [
+      "Vantar",
+      "Rethis",
+      "Rethis Shard"
+    ],
+    "contacts": [
+      "Relay Hulk"
+    ],
+    "rails": [
+      "Shard Nearside Rail"
+    ]
+  },
+  "railIds": [
+    "shard-nearside"
+  ],
+  "scenario": {
+    "bodies": [
+      {
+        "axialPhaseAtEpoch": 0,
+        "mu": 114130530000000000000,
+        "parent": -1,
+        "radius": 600000000,
+        "rotationPeriod": 2203200
+      },
+      {
+        "a": 179875474800,
+        "argPeriapsis": 0,
+        "axialPhaseAtEpoch": 0.39968039870670147,
+        "e": 0,
+        "meanAnomaly0": 0,
+        "mu": 327040700000000,
+        "parent": 0,
+        "radius": 6100000,
+        "rotationPeriod": 91980
+      },
+      {
+        "a": 400000000,
+        "argPeriapsis": 0,
+        "axialPhaseAtEpoch": 0.6003932626860493,
+        "e": 0.004,
+        "meanAnomaly0": 0.6003932626860493,
+        "mu": 5940126999.999999,
+        "parent": 1,
+        "radius": 180000,
+        "rotationPeriod": 152928
+      }
+    ],
+    "burnNodeCapacity": 0,
+    "capacity": 2,
+    "contacts": [
+      {
+        "captureRadius": 40000,
+        "host": 1,
+        "longitude": 6.056292504420323,
+        "minimumImpactEnergy": 1500000000000
+      }
+    ],
+    "dt": 30,
+    "historyTicks": 97,
+    "post": {
+      "host": 0,
+      "longitude": 0
+    },
+    "probe": {
+      "dryMass": 420,
+      "exhaustVelocity": 31000,
+      "propellantMass": 680,
+      "thrust": 9400
+    },
+    "rails": [
+      {
+        "headingCone": 1.2042771838760873,
+        "host": 2,
+        "longitude": 3.141592653589793,
+        "muzzleSpeedMax": 300000,
+        "muzzleSpeedMin": 60000,
+        "reloadTicks": 720
+      }
+    ],
+    "streams": []
+  },
+  "schema": 1,
+  "seed": 481516999
+}

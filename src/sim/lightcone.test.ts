@@ -324,6 +324,23 @@ describe('downlinkEmission', () => {
     });
     expect(downlinkEmission({ sim, object: 0, receiveTick: -5 })).toBe(-1);
   });
+
+  // GRV-0030, docs/issues/2026-09-18-downlink-emission-throws-at-current-tick.md: `sim.ts`'s
+  // `advance` always leaves `history.lastTick[object] === sim.tick`, so `receiveTick === sim.tick`
+  // -- "what does the post see right now" -- is the ordinary case, not a corner case, and used to
+  // throw through sampleState's own boundary check.
+  test('does not throw right after advance, with receiveTick === sim.tick', () => {
+    const sim = createSim({ scenario: scenarioWithPostOnRail(), seed: 1 });
+    advance({
+      sim,
+      log: [{ tick: 0, kind: 'launch', rail: 0, heading: 500_000_000, speed: 150_000_000 }],
+      ticks: 4000,
+    });
+    expect(sim.history.lastTick[0]).toBe(sim.tick);
+    const emissionTick = downlinkEmission({ sim, object: 0, receiveTick: sim.tick });
+    expect(emissionTick).toBeGreaterThan(0);
+    expect(emissionTick).toBeLessThanOrEqual(sim.tick);
+  });
 });
 
 describe('segmentBlocked (research §5.5)', () => {
@@ -377,13 +394,13 @@ describe('segmentBlocked (research §5.5)', () => {
     expect(segmentBlocked({ sim, ax: 10_000, ay: 0, bx: 20_000, by: 0, tick: 0 })).toBe(false);
   });
 
-  test('a segment exactly tangent to a body (touches at one point, never crosses in) counts as blocked', () => {
+  test('a segment that only barely clips a body still counts as blocked', () => {
     const sim = createSim({ scenario: simpleScenario(), seed: 1 });
-    // Segment along y = 1000 (exactly the body's own radius): the closest-approach point sits
-    // exactly on the sphere -- research §5.5's own "0 <= t1 <= 1" is inclusive of that boundary.
-    expect(segmentBlocked({ sim, ax: -10_000, ay: 1000, bx: 10_000, by: 1000, tick: 0 })).toBe(
-      true,
-    );
+    // Segment along y = 999 (1 m inside the body's own 1000 m radius, GRV-0030): a real, if
+    // marginal, intrusion -- 9 orders of magnitude past OCCLUSION_EPSILON's own tolerance
+    // (1e-9 * r^2, sub-millimetre here), so this is unambiguously "genuinely in the way", not
+    // grazing noise, and must never read as clear just because the margin is thin.
+    expect(segmentBlocked({ sim, ax: -10_000, ay: 999, bx: 10_000, by: 999, tick: 0 })).toBe(true);
   });
 
   test('an endpoint inside the body blocks', () => {
@@ -401,6 +418,103 @@ describe('segmentBlocked (research §5.5)', () => {
     expect(
       segmentBlocked({ sim, ax: post.x, ay: post.y, bx: post.x + 1e9, by: post.y, tick: 0 }),
     ).toBe(false);
+  });
+});
+
+// GRV-0030, docs/issues/2026-09-18-segmentblocked-false-positive-on-distant-target-graze.md: the
+// existing OCCLUSION_EPSILON slack above only ever protected point A's own c2 test, so an
+// endpoint sitting exactly on a *distant* body's own surface (a rail or a contact target -- or,
+// via src/sim/telemetry.ts, the post itself checked as the far endpoint of a downlink) hit the
+// same rounding problem unprotected, through the discriminant's own catastrophic cancellation at
+// astronomical distances (b2^2 and dd*c2 both ~1e45, nearly equal).
+describe('segmentBlocked: an endpoint far away, exactly on its own host’s surface (GRV-0030)', () => {
+  const FAR_A = 1.8e11; // m, ~10 light-minutes -- this issue's own repro scale.
+  const TARGET_RADIUS = 1.8e5; // m
+
+  // Body 0 hosts the post (near the origin); body 1 is far out on a circular orbit (constant
+  // distance at any t) and hosts the "target" endpoint -- a rail, a contact, or, in telemetry.ts's
+  // own case, the object being observed.
+  function farScenario(): Scenario {
+    return {
+      dt: DT,
+      capacity: 1,
+      burnNodeCapacity: 0,
+      bodies: [
+        { parent: -1, mu: 1e18, radius: 1e5, rotationPeriod: 1e9, axialPhaseAtEpoch: 0 },
+        {
+          parent: 0,
+          mu: 1e10,
+          radius: TARGET_RADIUS,
+          a: FAR_A,
+          e: 0,
+          argPeriapsis: 0,
+          meanAnomaly0: 0,
+          rotationPeriod: 1e9,
+          axialPhaseAtEpoch: 0,
+        },
+      ],
+      rails: [],
+      contacts: [],
+      post: { host: 0, longitude: 0 },
+      historyTicks: 4,
+      probe: { dryMass: 1, propellantMass: 1, exhaustVelocity: 1, thrust: 1 },
+      streams: [],
+    };
+  }
+
+  test('a target exactly on a distant body’s own surface, facing the source, is not blocked', () => {
+    const sim = createSim({ scenario: farScenario(), seed: 1 });
+    const post = postPositionAtTime({ sim, t: 0 }); // on body 0's surface, facing +x
+    // The point on body 1's own surface nearest the source -- the worst-case exact-tangent
+    // alignment this issue's own repro used (a rail/contact longitude facing straight back at the
+    // post is not a contrived input).
+    const target = { x: FAR_A - TARGET_RADIUS, y: 0 };
+    expect(
+      segmentBlocked({ sim, ax: post.x, ay: post.y, bx: target.x, by: target.y, tick: 0 }),
+    ).toBe(false);
+  });
+
+  test('both endpoints exactly on their own hosts’ surfaces, far apart, is not blocked', () => {
+    const sim = createSim({ scenario: farScenario(), seed: 1 });
+    const post = postPositionAtTime({ sim, t: 0 });
+    // Body 1's own "north pole" as seen from the post, not its far side -- a point on the far
+    // side sits geometrically behind body 1 itself from the post (a real block, not this issue).
+    const target = { x: FAR_A, y: TARGET_RADIUS };
+    expect(
+      segmentBlocked({ sim, ax: post.x, ay: post.y, bx: target.x, by: target.y, tick: 0 }),
+    ).toBe(false);
+  });
+
+  test('a body genuinely centred on a distant segment still blocks it', () => {
+    // A third body sitting squarely on the midpoint, radius comfortably spanning the gap -- a
+    // reformulation that stops false-blocking a grazing endpoint must still catch a real block.
+    const scenario = farScenario();
+    const blockerA = FAR_A / 2;
+    const sim = createSim({
+      scenario: {
+        ...scenario,
+        bodies: [
+          ...scenario.bodies,
+          {
+            parent: 0,
+            mu: 1,
+            radius: 1e10,
+            a: blockerA,
+            e: 0,
+            argPeriapsis: 0,
+            meanAnomaly0: 0,
+            rotationPeriod: 1e9,
+            axialPhaseAtEpoch: 0,
+          },
+        ],
+      },
+      seed: 1,
+    });
+    const post = postPositionAtTime({ sim, t: 0 });
+    const target = { x: FAR_A - TARGET_RADIUS, y: 0 };
+    expect(
+      segmentBlocked({ sim, ax: post.x, ay: post.y, bx: target.x, by: target.y, tick: 0 }),
+    ).toBe(true);
   });
 });
 

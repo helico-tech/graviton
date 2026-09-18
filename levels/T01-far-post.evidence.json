@@ -1,0 +1,39 @@
+{
+  "contacts": [
+    {
+      "cleared": true,
+      "closingSpeed": 214215.38872331099,
+      "id": "relay-hulk",
+      "impactEnergy": 25238528021233.58,
+      "impactTick": 5806,
+      "minimumImpactEnergy": 1500000000000,
+      "timeOfFlightSeconds": 2460
+    }
+  ],
+  "dtConvergence": [
+    {
+      "clearedAtDt": true,
+      "clearedAtHalfDt": true,
+      "closingSpeedAtDt": 214215.38872331099,
+      "closingSpeedAtHalfDt": 214215.38872331099,
+      "id": "relay-hulk",
+      "impactTimeDifferenceSeconds": 0,
+      "impactTimeSecondsAtDt": 174180,
+      "impactTimeSecondsAtHalfDt": 174180
+    }
+  ],
+  "finalStateHash": "89613addbe8d0eb3",
+  "level": "T01-far-post",
+  "levelHash": "sha256:4a60c3f63ba687487774ec2f0ef27f2a111d94623fa9531abde4d929775ea97f",
+  "outcome": {
+    "contactsCleared": 1,
+    "contactsTotal": 1,
+    "probesGranted": 2,
+    "probesLaunched": 1,
+    "propellantRemaining": [
+      680
+    ]
+  },
+  "simVersion": 5,
+  "solutionHash": "sha256:1010819e686089c183921a6369347ea55323e7d0d541b70cd503e9bbf5a4e497"
+}

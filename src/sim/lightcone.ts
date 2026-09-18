@@ -234,7 +234,30 @@ export function issueTickFor({
  *  endpoints evaluated at the same tick, never per the signal's own emission/reception times -- so
  *  occlusion is a cheap, deterministic pre-check rather than a second light-cone solve. Iterates
  *  bodies by index and stops at the first block (determinism rule 5: the result is a boolean, so
- *  iteration order can't change the value, but a fixed order keeps the profile stable anyway). */
+ *  iteration order can't change the value, but a fixed order keeps the profile stable anyway).
+ *
+ *  For each body, finds the closest point *on the segment* (not the infinite line) to its centre
+ *  by projecting the centre onto the segment and clamping the parameter to `[0, 1]` -- symmetric
+ *  in A and B, unlike an earlier version keyed off a `b2^2 - dd*c2` discriminant, which needed a
+ *  separate special case for point A sitting exactly on a body's own surface (the post's own
+ *  host, research §5.5's own worked example) and had none at all for point B doing the same (a
+ *  rail or a contact on a distant body, GRV-0030, docs/issues/2026-09-18-segmentblocked-false-
+ *  positive-on-distant-target-graze.md): squaring and subtracting two ~1e45-magnitude nearly-equal
+ *  quantities at astronomical distances lost enough precision to read a few-hundred-km-scale exact
+ *  tangent graze as a real overlap. Every quantity here is instead a coordinate difference or a
+ *  ratio, never that cancellation-prone difference of squares.
+ *
+ *  `OCCLUSION_EPSILON`'s relative slack applies uniformly, wherever the closest point lands --
+ *  *not* only near an endpoint (an earlier version of this fix tried that distinction and broke
+ *  the flyby-burn golden: a body genuinely, substantially in the way near one end of a segment
+ *  -- the post's own moon, rotated out of its own line of sight -- has its closest-approach point
+ *  land close to that same endpoint purely because the body is small relative to the segment's
+ *  length, exactly like a real graze does, so "close to an endpoint" alone cannot tell the two
+ *  apart). A uniform tolerance works because the two cases differ by many orders of magnitude on
+ *  the one axis that actually matters -- how far inside or outside the surface the closest point
+ *  is, in metres, never how far along the segment it sits: real floating-point noise on a surface
+ *  point is sub-micrometre, while any occlusion research §5.5's own crossing test was ever meant
+ *  to catch is metres to kilometres. */
 export function segmentBlocked({
   sim,
   ax,
@@ -265,17 +288,14 @@ export function segmentBlocked({
 
     const fx = ax - cx;
     const fy = ay - cy;
-    const b2 = fx * dx + fy * dy;
-    const c2 = fx * fx + fy * fy - r * r;
-    const insideTolerance = OCCLUSION_EPSILON * r * r;
-    if (c2 > -insideTolerance && b2 > 0) continue; // both endpoints outside, moving away from it
-    if (c2 < -insideTolerance) return true; // an endpoint is inside this body's occlusion sphere
-    if (dd === 0) continue; // zero-length segment, on or outside the sphere: no crossing
+    let u = dd > 0 ? -(fx * dx + fy * dy) / dd : 0;
+    if (u < 0) u = 0;
+    else if (u > 1) u = 1;
+    const nx = fx + u * dx;
+    const ny = fy + u * dy;
+    const dist2 = nx * nx + ny * ny;
 
-    const disc = b2 * b2 - dd * c2;
-    if (disc < 0) continue;
-    const t1 = (-b2 - Math.sqrt(disc)) / dd;
-    if (t1 >= 0 && t1 <= 1) return true;
+    if (dist2 < r * r * (1 - OCCLUSION_EPSILON)) return true;
   }
 
   return false;

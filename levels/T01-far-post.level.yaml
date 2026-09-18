@@ -1,0 +1,110 @@
+# yaml-language-server: $schema=./schema/level.schema.json
+#
+# GRV-0030 fixture (T prefix): proves the telemetry/information-horizon machinery end to end. The
+# post sits on the system primary; the rail's host orbits ten light-minutes out (`a: 10 lm`, `e: 0`
+# so the distance never changes), so a launch order takes ~600 s (~20 ticks at dt=30s) to arrive
+# and every observation of the probe is ~600 s stale by the time it reaches the post (ADR-0007
+# §5-6, docs/domain/signal-delay-and-uncertainty.md §2). The post faces the rail's host directly
+# (longitude 0, matching the host's own meanAnomalyAtEpoch 0) so the uplink/downlink path never
+# grazes the post's own host. Local geometry (rail on the moon, contact on the planet, same body
+# masses/radii/orbit/rotation phases as T00-compiler-fixture's own tesh/sadal) mirrors T00's own
+# proven-solvable pairing (GRV-0017) exactly -- only the distance to the post is new here.
+#
+# The first level whose post is genuinely offset from the rail -- this exposed a real bug in
+# `evaluateLaunch` (src/levels/solve.ts, docs/issues/2026-09-18-solve-evaluatelaunch-ignores-
+# uplink-delay.md, fixed in GRV-0030): it used to build its trial command as
+# `command.tick = launchTick` directly and read the probe's state starting that same tick, but the
+# real simulation only materialises a launch at `uplinkArrival(issueTick)`, which is *later* than
+# the issue tick whenever the post is offset -- so the old solver scored every T01 candidate
+# against a stretch of stale/zeroed object state. Now fixed (evaluateLaunch issues its own trial
+# command through `issueTickFor`, the same path the real committed log uses, and only reads the
+# probe once it actually exists): `levels/T01-far-post.solution.json` is the solver's own,
+# unmodified `pnpm levels:solve T01-far-post --write` output.
+schema: 1
+id: T01-far-post
+name: Far Post
+brief: >-
+  Vantar Post sits ten light-minutes from Rethis and everything orbiting it. A derelict hulk rides
+  Rethis itself; Rethis Shard, a small moon, carries the only rail in range. Every order you send
+  takes ten minutes to arrive, and everything you see already happened ten minutes ago -- plan the
+  launch, commit it, and clear the hulk before the window closes.
+debrief: >-
+  The order left the post before the probe fired, and the confirmation reached you after it did.
+  Nothing you saw while the probe was in flight was the probe as it actually was -- it was the
+  probe as it had been, ten minutes earlier. That gap never closes, no matter how fast the probe
+  flies.
+seed: 481516999
+streams: []
+dt: 30 s
+
+bodies:
+  - id: vantar
+    name: Vantar
+    class: star
+    mass: 1.71e30 kg
+    radius: 600000 km
+    rotationPeriod: 25.5 d
+    axialPhaseAtEpoch: 0 deg
+
+  - id: rethis
+    name: Rethis
+    class: rock
+    mass: 4.9e24 kg
+    radius: 6100 km
+    rotationPeriod: 25h 33m
+    axialPhaseAtEpoch: 22.9 deg
+    orbit:
+      parent: vantar
+      a: 10 lm
+      e: 0
+      argPeriapsis: 0 deg
+      meanAnomalyAtEpoch: 0 deg
+
+  - id: rethis-shard
+    name: Rethis Shard
+    class: ice
+    mass: 8.9e19 kg
+    radius: 180 km
+    rotationPeriod: 1.77 d
+    axialPhaseAtEpoch: 34.4 deg
+    orbit:
+      parent: rethis
+      a: 400000 km
+      e: 0.004
+      argPeriapsis: 0 deg
+      meanAnomalyAtEpoch: 34.4 deg
+
+rails:
+  - id: shard-nearside
+    name: Shard Nearside Rail
+    host: rethis-shard
+    longitude: 180 deg
+    muzzleSpeed: { min: 60 km/s, max: 300 km/s }
+    headingCone: 69 deg
+    reloadTime: 6 h
+
+probes:
+  - id: courier
+    name: Courier
+    count: 2
+    dryMass: 420 kg
+    propellantMass: 680 kg
+    exhaustVelocity: 31 km/s
+    maxThrust: 9.4 kN
+    nodeBudget: 0
+
+contacts:
+  - kind: fixed
+    id: relay-hulk
+    name: Relay Hulk
+    host: rethis
+    longitude: 347 deg
+    captureRadius: 40 km
+    clearedBy:
+      minimumImpactEnergy: 1.5 TJ
+
+# GRV-0030: the post sits on the primary, facing directly toward Rethis (longitude 0, matching
+# Rethis's own meanAnomalyAtEpoch) -- ten light-minutes from the rail's host.
+post:
+  host: vantar
+  longitude: 0 deg

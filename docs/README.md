@@ -69,6 +69,16 @@ automatically drops the rung to 1x and inverts the status bar for exactly one re
 `.` (debug `warpToEvent()`) jumps straight to the next known one. `events()`/`nextEventTick()`
 round out the debug API.
 
+Telemetry and the information horizon (GRV-0030, ADR-0007 §5-6): the plot never shows a probe's
+true, live state -- only its last observation (solid trail) and a prediction from there to now
+(dotted, fading tail and marker), both read from `App.observed(index)`/`window.graviton.observed
+(index)`. The status bar's `DELAY` and the selection panel's `OBSERVED` age both come from
+`App.delay(selection)`/`window.graviton.delay(selection)`. Events (launch, node start/end, impact,
+body hit, a contact clearing) are now telemetry events: each carries the simulation `tick` it
+actually happened at and the `arrivalTick` the post's own telemetry revealed it -- the automatic
+drop and the status line fire at `arrivalTick`, timeline marks sit at `tick`. Closest approach is
+still a prediction, unaffected.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;

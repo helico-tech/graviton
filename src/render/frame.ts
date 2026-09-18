@@ -56,11 +56,35 @@ export interface FrameContact {
 }
 
 export interface FrameObject {
+  /** The predicted present (GRV-0030, GAME-0001 §4.6 "information horizon"): a replay of the
+   *  committed log from the object's last observation to now, never the true live state -- `x`/
+   *  `y`/`vx`/`vy` are meaningless (zero) when `observed` is false. */
   readonly x: number;
   readonly y: number;
   readonly vx: number;
   readonly vy: number;
-  /** Hit a body, or hit/cleared a fixed contact (dynamics/step.ts's own "expended"). */
+  /** Whether the observation itself -- not the live or predicted state -- already shows the
+   *  object expended (hit a body, or hit/cleared a fixed contact): the post does not know a probe
+   *  is expended until its own telemetry says so. */
+  readonly expended: boolean;
+  /** Whether the post has ever observed this object yet -- false before its first light reaches
+   *  the post, or while the path is occluded at every tick since (GRV-0030); nothing is drawn for
+   *  an unobserved object (the plot never shows the true state, and there is no predicted one
+   *  without an observation to predict from). */
+  readonly observed: boolean;
+}
+
+/** The subset of `src/app/observed.ts`'s `ObservedObject` this module reads, restated
+ *  structurally rather than imported so `src/render` still depends on neither `src/app` nor
+ *  `src/ui` (this module's own header, research §A.7's separation) -- mirrors `FrameLevelNames`'s
+ *  own relationship to `CompiledLevel`. */
+export interface FrameObservation {
+  readonly predicted: {
+    readonly x: number;
+    readonly y: number;
+    readonly vx: number;
+    readonly vy: number;
+  } | null;
   readonly expended: boolean;
 }
 
@@ -173,15 +197,23 @@ export function largestOrbitApoapsis(bodies: BodyTable): number {
  *  is an O(1) closed-form query at any time (docs/domain/simulation-determinism.md's two-tier
  *  model), so this needs no stepping. `objects` (probes) are never affected by it: a dynamic
  *  object has no analytic position away from `sim`'s own current tick, so they -- and `Frame.tick`
- *  itself -- always read the simulation's real "now", exactly as the design note specifies
- *  ("probes/trails are drawn as at present"). */
+ *  itself -- always read the simulation's real "now".
+ *
+ *  `observed`, one entry per `sim.objects` index (GRV-0030): the post's own picture of each
+ *  object (src/app/observed.ts), never `sim.objects` itself -- rule 12/GAME-0001 §4.7's whole
+ *  point is that the post never sees the true, live state of a dynamic object, only what its own
+ *  telemetry has confirmed plus a prediction from there. A missing or `null`-predicted entry
+ *  draws nothing for that object (`FrameObject.observed` false) -- there is no true state to fall
+ *  back to. */
 export function captureFrame({
   sim,
   level,
+  observed,
   t: tOverride,
 }: {
   sim: Sim;
   level: FrameLevelNames;
+  observed: readonly FrameObservation[];
   t?: number;
 }): Frame {
   const t = tOverride ?? sim.tick * sim.scenario.dt;
@@ -225,15 +257,21 @@ export function captureFrame({
   }
 
   const objects: FrameObject[] = [];
-  const o = sim.objects;
-  for (let i = 0; i < o.count; i++) {
-    objects.push({
-      x: o.x[i]!,
-      y: o.y[i]!,
-      vx: o.vx[i]!,
-      vy: o.vy[i]!,
-      expended: o.hitBody[i]! !== -1 || o.hitContact[i]! !== -1,
-    });
+  for (let i = 0; i < sim.objects.count; i++) {
+    const view = observed[i];
+    const predicted = view?.predicted;
+    objects.push(
+      predicted
+        ? {
+            x: predicted.x,
+            y: predicted.y,
+            vx: predicted.vx,
+            vy: predicted.vy,
+            expended: view.expended,
+            observed: true,
+          }
+        : { x: 0, y: 0, vx: 0, vy: 0, expended: false, observed: false },
+    );
   }
 
   return {

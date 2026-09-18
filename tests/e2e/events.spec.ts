@@ -48,23 +48,35 @@ test('warpToEvent() drops to launch, then to impact, at the evidence file’s ow
   expect(state.tick).toBe(L01_LAUNCH_TICK + 1); // one past the tick the launch command fires at
 
   // The design note allows either a closest approach or an impact next; this solution is a direct
-  // intercept (no flyby before the hit), so the real next drop is straight to impact -- looping
-  // (bounded) keeps the test honest about that rather than assuming it.
+  // intercept (no flyby before the hit), so the real next drop is straight to the *predicted*
+  // impact tick (nextEventTick's own prediction, src/app/predict.ts, unaffected by GRV-0030) --
+  // looping (bounded) keeps the test honest about that rather than assuming it.
   let guard = 0;
   do {
     await page.evaluate(() => window.graviton!.warpToEvent());
     readouts = await page.evaluate(() => window.graviton!.readouts());
+    state = await page.evaluate(() => window.graviton!.state());
     expect(readouts['status.warp']).toBe('1x'); // every drop lands at 1x, never anything else
     guard++;
-  } while (!readouts['status.event']!.startsWith('IMPACT') && guard < 5);
+  } while (state.tick <= L01_IMPACT_TICK && guard < 5);
 
-  state = await page.evaluate(() => window.graviton!.state());
-  expect(readouts['status.event']).toBe(`IMPACT PRB-01 → ${'DRIFT-HULK'}`);
   expect(state.tick).toBe(L01_IMPACT_TICK + 1);
   expect(l01Evidence.contacts[0]!.impactTick).toBe(L01_IMPACT_TICK); // cross-check the fixture itself
 
+  // GRV-0030: the impact itself is still at L01_IMPACT_TICK (unchanged physics), but its
+  // *telemetry* doesn't arrive by warpToEvent's own predicted-tick landing -- the post (on
+  // meskel) sits on the far side of its own host from the impact site (on yarune) for a while
+  // right after impact (meskel's day/night cycle, ADR-0007 §4's "occlusion turns planets into
+  // communications terrain"), confirmed directly against segmentBlocked/observedState
+  // (docs/evidence/GRV-0030/README.md has the numbers). Warping on lets telemetry catch up.
+  await page.evaluate(() => window.graviton!.warpTo(3900));
+  readouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(readouts['status.event']).toBe(`IMPACT PRB-01 → ${'DRIFT-HULK'}`);
+
   const events = await page.evaluate(() => window.graviton!.events());
-  expect(events).toContainEqual({ tick: L01_IMPACT_TICK, kind: 'impact', probe: 0, contact: 0 });
+  expect(events).toContainEqual(
+    expect.objectContaining({ tick: L01_IMPACT_TICK, kind: 'impact', probe: 0, contact: 0 }),
+  );
 
   expect(gate.violations()).toEqual([]);
 });
