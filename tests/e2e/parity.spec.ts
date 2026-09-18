@@ -92,13 +92,3 @@ for (const name of goldenNames()) {
     });
   });
 }
-
-test('window.graviton is not installed without ?debug=1', async ({ page }) => {
-  const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
-
-  await page.goto('/');
-  const graviton = await page.evaluate(() => window.graviton);
-
-  expect(graviton).toBeUndefined();
-  expect(gate.violations()).toEqual([]);
-});

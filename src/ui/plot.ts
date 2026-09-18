@@ -238,7 +238,7 @@ export function createPlotController({
   }
 
   function getView(): View {
-    return currentView(getFrame());
+    return { ...currentView(getFrame()) };
   }
 
   function setView(patch: Partial<View>): void {

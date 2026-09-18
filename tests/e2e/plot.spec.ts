@@ -183,3 +183,22 @@ test('wheel zooms about the cursor and drag pans, both changing view()', async (
 
   expect(gate.violations()).toEqual([]);
 });
+
+test('view() returns a copy: mutating the result does not move the camera', async ({ page }) => {
+  const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
+
+  await page.goto('/?debug=1');
+  await page.waitForFunction(() => window.graviton?.ready === true);
+  await page.evaluate(() => window.graviton!.render());
+
+  const before = await page.evaluate(() => window.graviton!.view().metresPerPixel);
+  const after = await page.evaluate(() => {
+    // The type is readonly; the cast is the point: a caller ignoring it must still be harmless.
+    const leaked = window.graviton!.view() as { metresPerPixel: number };
+    leaked.metresPerPixel = 999999;
+    return window.graviton!.view().metresPerPixel;
+  });
+  expect(after).toBe(before);
+
+  expect(gate.violations()).toEqual([]);
+});

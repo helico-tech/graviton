@@ -1,11 +1,13 @@
 // The timeline strip (GAME-0002 §8, GRV-0023): a horizontal axis over `[0, rangeTicks]` with a
 // mark per launch command, a mark per contact's recorded impact tick once it happens, and a
 // present-time cursor. Rebuilt on every render rather than diffed -- panels snap, they don't tween
-// (GAME-0002 §9), and this strip carries at most a handful of marks.
+// (GAME-0002 §9), and this strip carries at most a handful of marks. The build tag used to live at
+// this strip's right end and collided with the cursor label there (docs/issues/2026-09-18-
+// timeline-label-collides-with-build-tag.md); it moved to the status bar (GRV-0024), so this strip
+// keeps only its own content.
 export interface TimelineRefs {
   element: HTMLElement;
   axis: HTMLElement;
-  buildTag: HTMLElement;
 }
 
 export interface TimelineMark {
@@ -14,7 +16,7 @@ export interface TimelineMark {
   readonly label: string;
 }
 
-export function createTimelineStrip({ buildSha }: { buildSha: string }): TimelineRefs {
+export function createTimelineStrip(): TimelineRefs {
   const element = document.createElement('footer');
   element.className = 'timeline-strip';
   const header = document.createElement('h2');
@@ -22,11 +24,8 @@ export function createTimelineStrip({ buildSha }: { buildSha: string }): Timelin
   header.textContent = 'Timeline';
   const axis = document.createElement('div');
   axis.className = 'timeline-axis';
-  const buildTag = document.createElement('span');
-  buildTag.className = 'build-tag';
-  buildTag.textContent = `GRAVITON build ${buildSha}`;
-  element.append(header, axis, buildTag);
-  return { element, axis, buildTag };
+  element.append(header, axis);
+  return { element, axis };
 }
 
 /** A tick's position along `[0, rangeTicks]` as a fraction of the axis, clamped to the visible
