@@ -1,7 +1,7 @@
 ---
 id: GRV-0023
 epic: EPIC-05
-status: todo
+status: done
 ---
 # GRV-0023 Selection, readouts and the level 01 hero frame
 
@@ -41,3 +41,12 @@ committed solution replays in the page and its hero frame is captured by both sc
   `?solution=1`.
 
 **Verification.** `pnpm check`, `pnpm e2e`, `pnpm screenshot --debug`, `pnpm render`.
+
+**Delivered.** Selection is `src/app/selection.ts`'s `{ kind, index } | null`, picked by `pickAt`
+(pure, over a `Frame`/`View`, priority probe > contact > rail > body within a 1 px tie) and
+described by `describeSelection` (pure, over a live `Sim` and the level's names, never the
+renderer). The app (`src/app/app.ts`) owns the state; `src/render/plot.ts` only draws the ring.
+`src/app/solutions.ts` bundles `levels/*.solution.json` exactly as `levels.ts` bundles levels;
+`?solution=1`/`loadSolution()` replay one into the session's existing command log.
+`src/ui/{selection,timeline}.ts` render the panel and the timeline strip (new files, replacing
+`src/ui/panels.ts`). Evidence: `docs/evidence/GRV-0023/README.md`.

@@ -200,11 +200,37 @@ body {
   overflow: auto;
 }
 
-.timeline-strip {
-  grid-area: timeline;
+/* The emphasis-size id/name line under the header (GAME-0002 §3's "Value, emphasis" row, §8's
+   layout example: "SELECTION" then "PRB-01" then its fields). */
+.selection-name {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.selection-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.selection-field {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  gap: 12px;
+}
+
+.selection-field .value {
+  text-align: right;
+}
+
+.timeline-strip {
+  grid-area: timeline;
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .panel-header {
@@ -219,6 +245,60 @@ body {
 
 .timeline-strip .panel-header {
   margin: 0;
+}
+
+/* The axis a launch/impact mark and the present-time cursor sit on (src/ui/timeline.ts):
+   `.timeline-mark`/`.timeline-cursor` are positioned with an inline `left` percentage the pure
+   `markFraction` computes, never a CSS transition (GAME-0002 §9 -- ticks move only because
+   simulated time moves). */
+.timeline-axis {
+  position: relative;
+  flex: 1;
+  height: 28px;
+}
+
+.timeline-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--hairline);
+}
+
+.timeline-mark,
+.timeline-cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  transform: translateX(-50%);
+}
+
+.timeline-mark::before,
+.timeline-cursor::before {
+  content: '';
+  width: 1px;
+  height: 8px;
+  background: var(--known-dim);
+  margin-bottom: 12px;
+}
+
+.timeline-cursor::before {
+  height: 12px;
+  background: var(--known);
+}
+
+.timeline-mark-label {
+  position: absolute;
+  bottom: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .placeholder {

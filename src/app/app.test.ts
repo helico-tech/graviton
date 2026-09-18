@@ -242,6 +242,130 @@ describe('createApp: frame() and trails()', () => {
   });
 });
 
+describe('createApp: selection', () => {
+  test('starts null, select() sets it and re-renders synchronously', () => {
+    const { changes, onChange } = recorder();
+    const app = createApp({ onChange });
+    app.load({ scenario: scenario(), seed: 1 });
+    const before = changes.length;
+
+    expect(app.selection()).toBeNull();
+    app.select({ kind: 'body', index: 0 });
+
+    expect(app.selection()).toEqual({ kind: 'body', index: 0 });
+    expect(changes.length).toBe(before + 1);
+  });
+
+  test('selectionReadouts reads the loaded session, not the frame', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.select({ kind: 'body', index: 0 });
+
+    const rows = app.selectionReadouts();
+
+    expect(rows.find((r) => r.key === 'class')?.value).toBe('Rock');
+  });
+
+  test('selectionReadouts() never throws, even after a failed loadLevel (regression: main.ts calls it from every onChange, including a failed load’s)', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('nope');
+
+    expect(() => app.selectionReadouts()).not.toThrow();
+    expect(app.selectionReadouts()).toEqual([]);
+  });
+
+  test('selectionReadouts() never throws before anything has ever been loaded', () => {
+    const app = createApp({ onChange: () => {} });
+    expect(() => app.selectionReadouts()).not.toThrow();
+  });
+
+  test('a fresh load clears the previous selection', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    app.select({ kind: 'body', index: 0 });
+
+    app.load({ scenario: scenario(), seed: 1 });
+
+    expect(app.selection()).toBeNull();
+  });
+});
+
+describe('createApp: selectionName', () => {
+  test('empty before anything is selected, the level id/name once one is', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('L01-intercept');
+    expect(app.selectionName()).toBe('');
+
+    app.select({ kind: 'body', index: 1 });
+    expect(app.selectionName()).toBe('Meskel');
+  });
+});
+
+describe('createApp: timelineData', () => {
+  test('null before anything is loaded', () => {
+    const app = createApp({ onChange: () => {} });
+    expect(app.timelineData()).toBeNull();
+  });
+
+  test('a launch mark and the cursor, before any solution is loaded', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+
+    app.command(launchCommand({ tick: 2 }));
+    app.step(5);
+    const data = app.timelineData()!;
+
+    expect(data.cursor.tick).toBe(5);
+    expect(data.rangeTicks).toBe(5); // no solution loaded -> max(tick, 1)
+    expect(data.marks).toEqual([]); // marks come from the *solution* log, not the raw command log
+  });
+
+  test('after loadSolution: a launch mark per command, range from the solution, plus impact marks', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('L01-intercept');
+    app.loadSolution();
+    const solution = app.solution()!;
+
+    const beforeImpact = app.timelineData()!;
+    expect(beforeImpact.marks).toHaveLength(1);
+    expect(beforeImpact.marks[0]!.key).toBe('launch.0');
+    expect(beforeImpact.marks[0]!.tick).toBe(solution.log[0]!.tick);
+    expect(beforeImpact.rangeTicks).toBe(solution.ticks);
+
+    app.warpTo(solution.ticks);
+    const afterImpact = app.timelineData()!;
+    expect(afterImpact.marks.some((m) => m.key === 'impact.0')).toBe(true);
+    expect(afterImpact.cursor.tick).toBe(solution.ticks);
+  });
+});
+
+describe('createApp: loadSolution', () => {
+  test('applies L01-intercept’s committed solution log and exposes it', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('L01-intercept');
+    expect(app.solution()).toBeNull();
+
+    app.loadSolution();
+
+    expect(app.solution()?.log.length).toBeGreaterThan(0);
+    const snap = app.warpTo(app.solution()!.ticks);
+    expect(snap.count).toBe(1); // the solution's one launch actually applied
+  });
+
+  test('is a no-op before anything is loaded', () => {
+    const app = createApp({ onChange: () => {} });
+    expect(() => app.loadSolution()).not.toThrow();
+    expect(app.solution()).toBeNull();
+  });
+
+  test('is a no-op for a raw scenario, which has no level id', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: scenario(), seed: 1 });
+    expect(() => app.loadSolution()).not.toThrow();
+    expect(app.solution()).toBeNull();
+  });
+});
+
 describe('createApp: AppChange.justLoaded', () => {
   test('is true for load() and loadLevel(), including a failed loadLevel', () => {
     const { changes, onChange } = recorder();

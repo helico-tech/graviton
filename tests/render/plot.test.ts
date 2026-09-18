@@ -12,8 +12,9 @@ import type { Frame, FrameLevelNames } from '../../src/render/frame.ts';
 import { defaultView, pickScaleBar, worldToScreen } from '../../src/render/camera.ts';
 import type { View } from '../../src/render/camera.ts';
 import { hashCanvasPixels, renderPlot, SCALE_BAR_MARGIN_PX } from '../../src/render/plot.ts';
+import type { PlotSelection } from '../../src/render/plot.ts';
 import { GLYPH_SCREEN_RADIUS } from '../../src/render/bodies.ts';
-import { GROUND, HAIRLINE, KNOWN_DIM } from '../../src/render/palette.ts';
+import { GROUND, HAIRLINE, KNOWN, KNOWN_DIM, UNVERIFIED } from '../../src/render/palette.ts';
 import type { Ctx2D } from '../../src/render/ctx2d.ts';
 import { repoRoot } from '../../scripts/lib/repo.ts';
 
@@ -43,7 +44,15 @@ function frameAt({ ticks = 0, log = [] }: { ticks?: number; log?: Command[] } = 
 const WIDTH = 640;
 const HEIGHT = 360;
 
-function draw({ frame, view }: { frame: Frame; view: View }): {
+function draw({
+  frame,
+  view,
+  selection = null,
+}: {
+  frame: Frame;
+  view: View;
+  selection?: PlotSelection | null;
+}): {
   data: Buffer;
   ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>;
 } {
@@ -56,6 +65,7 @@ function draw({ frame, view }: { frame: Frame; view: View }): {
     trails: new Map(),
     canvasWidth: WIDTH,
     canvasHeight: HEIGHT,
+    selection,
   });
   return { data: canvas.toBuffer('image/png'), ctx };
 }
@@ -219,6 +229,89 @@ describe('renderPlot: scale bar', () => {
     expect(colorDistance(pixelAt(ctx, x1 - 1, y), KNOWN_DIM_RGB)).toBeLessThan(40);
     // Just past the ruler's far end, the stroke stops.
     expect(colorDistance(pixelAt(ctx, x0 - 10, y), KNOWN_DIM_RGB)).toBeGreaterThan(40);
+  });
+});
+
+describe('renderPlot: selection ring', () => {
+  test('rings the selected body in ice blue, at its true screen radius plus margin', () => {
+    const frame = frameAt();
+    const meskel = frame.bodies.find((b) => b.id === 'meskel')!;
+    const meskelIndex = frame.bodies.indexOf(meskel);
+    const metresPerPixel = meskel.radius / 40; // resolved-sphere mode, so the ring sits outside it
+    const view: View = { centreX: meskel.x, centreY: meskel.y, metresPerPixel };
+    const { ctx } = draw({ frame, view, selection: { kind: 'body', index: meskelIndex } });
+
+    const centre = worldToScreen({
+      view,
+      canvasWidth: WIDTH,
+      canvasHeight: HEIGHT,
+      x: meskel.x,
+      y: meskel.y,
+    });
+    const ringRadius = meskel.radius / metresPerPixel + 4;
+    let sawRing = false;
+    for (let deg = 0; deg < 360; deg += 5) {
+      const rad = (deg * Math.PI) / 180;
+      const px = pixelAt(
+        ctx,
+        centre.x + ringRadius * Math.cos(rad),
+        centre.y + ringRadius * Math.sin(rad),
+      );
+      if (colorDistance(px, hexToRgb(KNOWN)) < 20) sawRing = true;
+    }
+    expect(sawRing).toBe(true);
+  });
+
+  test('rings an uncleared contact in amber, not ice blue', () => {
+    const frame = frameAt();
+    const hulk = frame.contacts.find((c) => c.id === 'drift-hulk')!;
+    expect(hulk.cleared).toBe(false);
+    const view: View = { centreX: hulk.x, centreY: hulk.y, metresPerPixel: 500 };
+    const { ctx } = draw({ frame, view, selection: { kind: 'contact', index: 0 } });
+
+    const centre = worldToScreen({
+      view,
+      canvasWidth: WIDTH,
+      canvasHeight: HEIGHT,
+      x: hulk.x,
+      y: hulk.y,
+    });
+    const ringRadius = 8; // CONTACT_MARKER_RADIUS_PX (4) + the selection ring's margin (4)
+    let sawAmber = false;
+    for (let deg = 0; deg < 360; deg += 5) {
+      const rad = (deg * Math.PI) / 180;
+      const px = pixelAt(
+        ctx,
+        centre.x + ringRadius * Math.cos(rad),
+        centre.y + ringRadius * Math.sin(rad),
+      );
+      if (colorDistance(px, hexToRgb(UNVERIFIED)) < 20) sawAmber = true;
+    }
+    expect(sawAmber).toBe(true);
+  });
+
+  test('a null selection draws no ring: identical pixels to omitting the field entirely', () => {
+    const frame = frameAt();
+    const view = defaultView({
+      largestOrbitRadius: frame.systemExtent,
+      canvasWidth: WIDTH,
+      canvasHeight: HEIGHT,
+    });
+    const withNull = draw({ frame, view, selection: null });
+    const omitted = draw({ frame, view });
+    expect(hashCanvasPixels(withNull.ctx, WIDTH, HEIGHT)).toBe(
+      hashCanvasPixels(omitted.ctx, WIDTH, HEIGHT),
+    );
+  });
+
+  test('a selection index the frame does not have (a probe never launched) draws nothing, not a crash', () => {
+    const frame = frameAt();
+    const view = defaultView({
+      largestOrbitRadius: frame.systemExtent,
+      canvasWidth: WIDTH,
+      canvasHeight: HEIGHT,
+    });
+    expect(() => draw({ frame, view, selection: { kind: 'probe', index: 0 } })).not.toThrow();
   });
 });
 
