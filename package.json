@@ -23,6 +23,7 @@
     "work:new": "node scripts/new-work-item.ts",
     "issue": "node scripts/issues.ts",
     "headless": "node src/headless/run.ts",
+    "render": "node src/headless/render.ts",
     "e2e": "pnpm build && playwright test",
     "screenshot": "node scripts/screenshot.ts",
     "levels:build": "node scripts/levels-build.ts",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@napi-rs/canvas": "1.0.9",
     "@playwright/test": "1.63.0",
     "@types/node": "24.13.3",
     "@valibot/to-json-schema": "1.8.0",

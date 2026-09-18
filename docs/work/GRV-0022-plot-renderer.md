@@ -1,7 +1,7 @@
 ---
 id: GRV-0022
 epic: EPIC-05
-status: todo
+status: done
 ---
 # GRV-0022 Plot renderer
 
@@ -39,3 +39,9 @@ flown trails, at true scale with signposted glyphs, plus the renderer half of th
   the agent.
 
 **Verification.** `pnpm check`, `pnpm e2e`, `pnpm render`, `pnpm screenshot --debug`.
+
+**Delivered.** `renderPlot` draws bodies (banded sphere/glyph threshold), orbits, rails, contacts
+and probes with flown trails to GAME-0002 §4-7, running unchanged in the page and under
+`@napi-rs/canvas`; the debug API's `render`/`frameHash`/`view`/`setView` and `pnpm render` both
+work; found and fixed a pre-existing GRV-0021 CSS bug that hid the whole canvas and blocked
+pointer input. Evidence: `docs/evidence/GRV-0022/README.md`. Commit: see `git log`.

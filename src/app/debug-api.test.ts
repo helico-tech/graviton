@@ -122,4 +122,63 @@ describe('createDebugSession', () => {
     expect(session.hash()).toBe(hashBefore);
     expect(session.state()).toEqual(stateBefore);
   });
+
+  test('stepSampled reaches the same final state as step()', () => {
+    const viaStep = createDebugSession();
+    viaStep.load({ scenario: scenario(), seed: 1 });
+    viaStep.command(launchCommand());
+    const stepResult = viaStep.step(10);
+
+    const viaSampled = createDebugSession();
+    viaSampled.load({ scenario: scenario(), seed: 1 });
+    viaSampled.command(launchCommand());
+    const sampledResult = viaSampled.stepSampled(10, () => {});
+
+    expect(sampledResult).toEqual(stepResult);
+    expect(viaSampled.hash()).toBe(viaStep.hash());
+  });
+
+  test('stepSampled calls onTick once per tick, with every live object position that tick', () => {
+    const session = createDebugSession();
+    session.load({ scenario: scenario(), seed: 1 });
+    session.command(launchCommand());
+
+    const samples: { x: number; y: number }[][] = [];
+    session.stepSampled(3, (positions) => samples.push([...positions]));
+
+    expect(samples).toHaveLength(3);
+    for (const sample of samples) expect(sample).toHaveLength(1); // the one launched probe
+    // The probe actually moves: not every sampled tick has the same position.
+    expect(new Set(samples.map((s) => s[0]!.x)).size).toBeGreaterThan(1);
+  });
+
+  test('captureFrame throws before a scenario is loaded, like state()/hash()', () => {
+    const session = createDebugSession();
+    const emptyLevel = {
+      bodyIds: [],
+      railIds: [],
+      contactIds: [],
+      bodyClasses: [],
+      names: { bodies: [], rails: [], contacts: [] },
+    };
+    expect(() => session.captureFrame(emptyLevel)).toThrow();
+  });
+
+  test('captureFrame reflects the loaded scenario', () => {
+    const session = createDebugSession();
+    session.load({ scenario: scenario(), seed: 1 });
+    const level = {
+      bodyIds: ['origin'],
+      railIds: [],
+      contactIds: [],
+      bodyClasses: ['rock'],
+      names: { bodies: ['Origin'], rails: [], contacts: [] },
+    };
+
+    const frame = session.captureFrame(level);
+
+    expect(frame.tick).toBe(0);
+    expect(frame.bodies).toHaveLength(1);
+    expect(frame.bodies[0]!.id).toBe('origin');
+  });
 });

@@ -10,9 +10,20 @@ import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts
 import { getLevel, levelIds } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
 import { formatSimTime } from './time.ts';
+import { createTrailSet, resetTrailSet, sampleTrailSet, trailPoints } from './trails.ts';
+import type { TrailSet } from './trails.ts';
 import { clampRung, stepRung, ticksPerFrame, togglePause as togglePauseRung } from './warp.ts';
 import type { WarpRung } from './warp.ts';
 import type { Command } from '../sim/sim.ts';
+import type { Frame, FrameLevelNames } from '../render/frame.ts';
+
+const EMPTY_LEVEL_NAMES: FrameLevelNames = {
+  bodyIds: [],
+  railIds: [],
+  contactIds: [],
+  bodyClasses: [],
+  names: { bodies: [], rails: [], contacts: [] },
+};
 
 export interface StatusValues {
   time: string;
@@ -36,6 +47,10 @@ export interface AppChange {
   status: StatusValues;
   plotError: PlotError | null;
   brief: Brief | null;
+  /** True only for the change emitted by `loadLevel`/`load` -- main.ts uses it to tell "a fresh
+   *  run started, reset the plot's camera to the level's default view" apart from an ordinary
+   *  `step`/`setWarp` update, which must never move the camera on its own (GAME-0002 §9). */
+  justLoaded: boolean;
 }
 
 export interface App {
@@ -51,6 +66,12 @@ export interface App {
   hash(): string;
   state(): StateSnapshot;
   run(args: RunArgs): RunResult;
+  /** A read-only render snapshot of the loaded session at its current tick (src/render/frame.ts);
+   *  throws if nothing is loaded, like `state()`/`hash()`. */
+  frame(): Frame;
+  /** Every dynamic object's flown trail so far, keyed by object index (src/app/trails.ts) --
+   *  sampled once per tick `step`/`warpTo` actually advanced, never derived. */
+  trails(): ReadonlyMap<number, readonly { x: number; y: number }[]>;
 }
 
 const DASH = '—';
@@ -70,6 +91,8 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   let brief: Brief | null = null;
   let rung: WarpRung = 0;
   let lastNonZeroRung: WarpRung = 1;
+  let levelNames: FrameLevelNames = EMPTY_LEVEL_NAMES;
+  const trailSet: TrailSet = createTrailSet();
 
   function statusValues(): StatusValues {
     if (!ready || currentDt === null) return NO_STATE;
@@ -82,8 +105,8 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     };
   }
 
-  function emit(plotError: PlotError | null = null): void {
-    onChange({ status: statusValues(), plotError, brief });
+  function emit(plotError: PlotError | null = null, justLoaded = false): void {
+    onChange({ status: statusValues(), plotError, brief, justLoaded });
   }
 
   function resetWarp(): void {
@@ -98,7 +121,9 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       currentDt = null;
       postName = DASH;
       brief = null;
-      emit({ id, knownIds: levelIds() });
+      levelNames = EMPTY_LEVEL_NAMES;
+      resetTrailSet(trailSet);
+      emit({ id, knownIds: levelIds() }, true);
       return undefined;
     }
     const snap = session.load({ scenario: level.scenario, seed: level.seed });
@@ -106,9 +131,11 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     const hostBody = level.scenario.rails[0]?.host;
     postName = hostBody === undefined ? DASH : (level.names.bodies[hostBody] ?? DASH);
     brief = { name: level.name, text: level.brief };
+    levelNames = level;
+    resetTrailSet(trailSet);
     resetWarp();
     ready = true;
-    emit();
+    emit(null, true);
     return snap;
   }
 
@@ -117,14 +144,16 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     const snap = session.load(args);
     currentDt = args.scenario.dt;
     postName = DASH; // a raw Scenario carries no body names to read a post from
+    levelNames = EMPTY_LEVEL_NAMES;
+    resetTrailSet(trailSet);
     resetWarp();
     ready = true;
-    emit();
+    emit(null, true);
     return snap;
   }
 
   function step(ticks: number): StateSnapshot {
-    const snap = session.step(ticks);
+    const snap = session.stepSampled(ticks, (positions) => sampleTrailSet(trailSet, positions));
     emit();
     return snap;
   }
@@ -155,5 +184,11 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     hash: () => session.hash(),
     state: () => session.state(),
     run: (args) => session.run(args),
+    frame: () => session.captureFrame(levelNames),
+    trails: () => {
+      const points = new Map<number, readonly { x: number; y: number }[]>();
+      trailSet.buffers.forEach((buffer, index) => points.set(index, trailPoints(buffer)));
+      return points;
+    },
   };
 }
