@@ -28,6 +28,8 @@ import {
 } from './palette.ts';
 import type { Frame, FrameContact, FrameObject, FrameRail } from './frame.ts';
 import type { Ctx2D } from './ctx2d.ts';
+import { drawPlannerFrame } from './ghost.ts';
+import type { PlannerFrame } from './ghost.ts';
 import { createHash, digest, updateWord } from '../sim/state/hash.ts';
 
 const RAIL_TICK_LENGTH_PX = 8;
@@ -283,6 +285,10 @@ export interface RenderPlotArgs {
    *  the ring, it never picks or owns the selection itself (GRV-0023 acceptance). `null`/`undefined`
    *  draws nothing. */
   selection?: PlotSelection | null;
+  /** The planner overlay (GRV-0026, src/render/ghost.ts's buildPlannerFrame) -- ghost path, burn
+   *  nodes, the selected node's handles, its events and the live launch-vector preview.
+   *  `null`/`undefined` draws nothing. */
+  planner?: PlannerFrame | null;
 }
 
 interface SelectionRingGeometry {
@@ -384,6 +390,7 @@ export function renderPlot({
   canvasWidth,
   canvasHeight,
   selection,
+  planner,
 }: RenderPlotArgs): void {
   clearGround(ctx, canvasWidth, canvasHeight);
 
@@ -413,6 +420,7 @@ export function renderPlot({
   });
   for (const object of frame.objects) drawProbe(ctx, { object, view, canvasWidth, canvasHeight });
   drawSelectionRing(ctx, { selection, frame, view, canvasWidth, canvasHeight });
+  drawPlannerFrame(ctx, { frame: planner ?? null, view, canvasWidth, canvasHeight });
 
   drawScaleBar(ctx, { pixels: scaleBar.pixels, label: scaleBar.label, canvasWidth, canvasHeight });
   drawZoomReadout(ctx, {

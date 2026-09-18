@@ -1,9 +1,14 @@
 ---
 id: GRV-0026
 epic: EPIC-06
-status: todo
+status: done
 ---
 # GRV-0026 Planner overlay
+
+**Delivered.** Launch drag off a rail, node placement/dragging on the ghost path, PLAN/SOLUTION
+panels, horizon scrub, commit -- all through `src/app/planner.ts`'s pure state and the live
+simulation's own ghost integration (`src/planner/ghost.ts`, untouched). See
+`docs/evidence/GRV-0026/README.md`.
 
 **Goal.** The player plans on the live plot: drag a launch vector off a rail, place and drag burn
 nodes, watch the dashed ghost integrate against the moving system, read the solution, commit
