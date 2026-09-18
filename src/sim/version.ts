@@ -16,4 +16,12 @@
 // (docs/evidence/GRV-0029). A level whose post sits on its rail's own host (both goldens, level
 // 01) sees no trajectory move -- see the evidence for the accuracy numbers and what did and did
 // not change.
-export const SIM_VERSION = 4;
+// 5 (GRV-0030): segmentBlocked's own occlusion test was reformulated (catastrophic cancellation
+// at astronomical distances, docs/issues/2026-09-18-segmentblocked-false-positive-on-distant-
+// target-graze.md) -- it now correctly reads a genuine, substantial occlusion the old discriminant
+// test missed as well as no longer misreading a distant surface point as blocked, so which command
+// logs the simulation *accepts* can change even though no trajectory the old check let through
+// moves (docs/evidence/GRV-0030): flyby-burn.json's own committed burn needed a new issue tick
+// through a real clear window; intercept.json is unaffected (its own path was never near the new
+// check's boundary) and stays bit-identical, hash included.
+export const SIM_VERSION = 5;

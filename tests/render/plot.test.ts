@@ -38,7 +38,11 @@ const solution: SolutionFile = JSON.parse(
 function frameAt({ ticks = 0, log = [] }: { ticks?: number; log?: Command[] } = {}): Frame {
   const sim = createSim({ scenario: level.scenario, seed: level.seed });
   if (ticks > 0) advance({ sim, log, ticks });
-  return captureFrame({ sim, level });
+  // GRV-0030: none of this file's own tests exercise probe marker/trail rendering (that's
+  // tests/e2e/telemetry.spec.ts's job) -- an empty observed view draws nothing for any probe,
+  // same as before this unit for a level with none launched, and pixel-hash-differs assertions
+  // here still hold since bodies move regardless.
+  return captureFrame({ sim, level, observed: [] });
 }
 
 const WIDTH = 640;
@@ -48,10 +52,12 @@ function draw({
   frame,
   view,
   selection = null,
+  predictedTails,
 }: {
   frame: Frame;
   view: View;
   selection?: PlotSelection | null;
+  predictedTails?: ReadonlyMap<number, readonly { x: number; y: number }[]>;
 }): {
   data: Buffer;
   ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>;
@@ -63,6 +69,7 @@ function draw({
     view,
     frame,
     trails: new Map(),
+    predictedTails,
     canvasWidth: WIDTH,
     canvasHeight: HEIGHT,
     selection,
@@ -312,6 +319,79 @@ describe('renderPlot: selection ring', () => {
       canvasHeight: HEIGHT,
     });
     expect(() => draw({ frame, view, selection: { kind: 'probe', index: 0 } })).not.toThrow();
+  });
+});
+
+describe('renderPlot: predicted tail (GRV-0030)', () => {
+  const UNVERIFIED_RGB = hexToRgb(UNVERIFIED);
+
+  // The dotted dash pattern (1 px on, 4 px off, palette.ts) leaves most x positions in a gap --
+  // scans a span and keeps the pixel closest to pure UNVERIFIED (the best-lit dot found), rather
+  // than sampling one fixed x that might land in a gap.
+  function closestToUnverified(
+    ctx: ReturnType<ReturnType<typeof createCanvas>['getContext']>,
+    { fromX, toX, y }: { fromX: number; toX: number; y: number },
+  ): number {
+    let best = Infinity;
+    for (let x = fromX; x <= toX; x++) {
+      const d = colorDistance(pixelAt(ctx, x, y).slice(0, 3), UNVERIFIED_RGB);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  test('a dotted predicted tail draws amber along its own path, and fades toward the observation', () => {
+    const frame = frameAt();
+    const withObject: Frame = {
+      ...frame,
+      objects: [{ x: 0, y: 0, vx: 0, vy: 0, expended: false, observed: true }],
+    };
+    const view: View = { centreX: 0, centreY: 0, metresPerPixel: 1 };
+    // A straight horizontal tail from the observation (-100, 0) to the predicted present (0, 0),
+    // sampled at several points along the way (drawPredictedTail fades *per segment*, so a
+    // two-point tail -- one single segment -- has nothing to fade between; a real tail always has
+    // one sample per tick) -- world units equal screen pixels at metresPerPixel 1, centred on the
+    // canvas.
+    const tail: { x: number; y: number }[] = [];
+    for (let x = -100; x <= 0; x += 10) tail.push({ x, y: 0 });
+    const predictedTails = new Map([[0, tail]]);
+    const { ctx } = draw({ frame: withObject, view, predictedTails });
+
+    const cx = WIDTH / 2;
+    const cy = HEIGHT / 2;
+    const nearObservation = closestToUnverified(ctx, { fromX: cx - 100, toX: cx - 80, y: cy });
+    const nearPresent = closestToUnverified(ctx, { fromX: cx - 20, toX: cx, y: cy });
+
+    expect(nearObservation).toBeLessThan(60); // a dot is somewhere in this span, even if dim
+    expect(nearPresent).toBeLessThan(30); // full alpha near the present end, close to pure amber
+    // Fainter (more blended with the ground) near the stale end than near the present end -- a
+    // lower `globalAlpha` composited over GROUND reads farther from pure UNVERIFIED.
+    expect(nearObservation).toBeGreaterThan(nearPresent);
+  });
+
+  test('an unobserved object draws no predicted tail, even if one is supplied', () => {
+    const frame = frameAt();
+    const withObject: Frame = {
+      ...frame,
+      objects: [{ x: 0, y: 0, vx: 0, vy: 0, expended: false, observed: false }],
+    };
+    const view: View = { centreX: 0, centreY: 0, metresPerPixel: 1 };
+    const predictedTails = new Map([
+      [
+        0,
+        [
+          { x: -100, y: 0 },
+          { x: 0, y: 0 },
+        ] as { x: number; y: number }[],
+      ],
+    ]);
+    const { ctx } = draw({ frame: withObject, view, predictedTails });
+
+    const cx = WIDTH / 2;
+    const cy = HEIGHT / 2;
+    expect(colorDistance(pixelAt(ctx, cx - 50, cy).slice(0, 3), UNVERIFIED_RGB)).toBeGreaterThan(
+      40,
+    );
   });
 });
 

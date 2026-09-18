@@ -223,8 +223,17 @@ describe('ghost invariant: flyby-burn golden, its burn node plus a second, among
       heading: originalLaunch.heading,
       speed: originalLaunch.speed,
       nodes: [
+        // atTick 2000, not the golden's own 3000 (GRV-0030, docs/issues/2026-09-18-ghost-lazy-
+        // issuance-cannot-cross-a-long-blocked-stretch.md): the moon genuinely occludes the probe
+        // 2278-4403, and issueTickFor's own bounded backward search (a fixed step count by design,
+        // determinism rule 7) can't cross a stretch that long from a naive atTick-anchored
+        // estimate -- unlike the committed golden's own issue tick (2277), found by exhaustively
+        // searching for the latest clear tick, not through issueTickFor's bounded search. 2000
+        // sits inside the same clear window (1593-2277) the golden's own burn actually fires
+        // through, so this keeps testing a real, physically firing node -- just not the exact
+        // tick the lazy-issuance/batched-issuance equivalence this test proves cannot reach.
         {
-          atTick: originalBurn.atTick,
+          atTick: 2000,
           prograde: originalBurn.prograde,
           lateral: originalBurn.lateral,
         },
@@ -309,7 +318,14 @@ describe('ghost cache', () => {
       heading: 3447904301,
       speed: 35000000,
       nodes: [
-        { atTick: 1000, prograde: 200000, lateral: 50000 },
+        // atTick 100/2000, not the round 1000/2000 this test used before GRV-0030 (docs/issues/
+        // 2026-09-18-ghost-lazy-issuance-cannot-cross-a-long-blocked-stretch.md): the moon
+        // genuinely occludes the probe ticks 141-1592, and issueTickFor's own bounded backward
+        // search (a fixed step count by design) can't cross that whole stretch from a naive
+        // atTick=1000-anchored estimate -- not what this test is about, so its first node moved to
+        // 100 (inside the same early clear window [1,140] the search can actually reach). Node 1's
+        // own issue tick is read back from the cache below, never hardcoded.
+        { atTick: 100, prograde: 200000, lateral: 50000 },
         { atTick: 2000, prograde: secondNodeProgradeMmPerS, lateral: 0 },
       ],
     };

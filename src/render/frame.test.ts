@@ -2,7 +2,7 @@
 // Built on a small hand-rolled scenario (primary, one orbiting body, a rail, a contact) rather
 // than a bundled level, so the expected geometry is checkable by hand.
 import { describe, expect, test } from 'vitest';
-import { createSim } from '../sim/sim.ts';
+import { advance, createSim } from '../sim/sim.ts';
 import type { Scenario } from '../sim/sim.ts';
 import { captureFrame, largestOrbitApoapsis } from './frame.ts';
 import type { FrameLevelNames } from './frame.ts';
@@ -60,14 +60,14 @@ const levelNames: FrameLevelNames = {
 describe('captureFrame', () => {
   test('carries the tick and dt through unchanged', () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     expect(frame.tick).toBe(0);
     expect(frame.dt).toBe(60);
   });
 
   test('the primary sits at the origin, has no orbit, and no direction to itself', () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     const primary = frame.bodies[0]!;
     expect(primary.x).toBe(0);
     expect(primary.y).toBe(0);
@@ -78,7 +78,7 @@ describe('captureFrame', () => {
 
   test('an orbiting body at its periapsis points straight back at the primary', () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     const orbiter = frame.bodies[1]!;
 
     expect(orbiter.x).toBeCloseTo(A * (1 - E), 3); // periapsis distance, meanAnomaly0 = 0
@@ -89,7 +89,7 @@ describe('captureFrame', () => {
 
   test("the orbit ellipse passes through the body's own current position", () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     const orbiter = frame.bodies[1]!;
     const orbit = orbiter.orbit!;
 
@@ -104,7 +104,7 @@ describe('captureFrame', () => {
 
   test("a rail's muzzle point sits on its host body's surface", () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     const rail = frame.rails[0]!;
     const host = frame.bodies[1]!;
     expect(Math.hypot(rail.x - host.x, rail.y - host.y)).toBeCloseTo(host.radius, 3);
@@ -114,7 +114,7 @@ describe('captureFrame', () => {
 
   test("a contact sits on its host body's surface and starts uncleared", () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     const contact = frame.contacts[0]!;
     const host = frame.bodies[1]!;
     expect(Math.hypot(contact.x - host.x, contact.y - host.y)).toBeCloseTo(host.radius, 3);
@@ -123,8 +123,71 @@ describe('captureFrame', () => {
 
   test('no dynamic objects at tick 0 (nothing launched yet)', () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
-    const frame = captureFrame({ sim, level: levelNames });
+    const frame = captureFrame({ sim, level: levelNames, observed: [] });
     expect(frame.objects).toEqual([]);
+  });
+
+  // GRV-0030: captureFrame reads the observed view for every object, never sim.objects.
+  describe('objects read the observed view, never the live state', () => {
+    function launchedSim(): ReturnType<typeof createSim> {
+      const sim = createSim({ scenario: scenario(), seed: 1 });
+      advance({
+        sim,
+        log: [{ tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 100_000_000 }],
+        ticks: 5,
+      });
+      return sim;
+    }
+
+    test('a launched object with no observed-view entry at all draws nothing', () => {
+      const sim = launchedSim();
+      const frame = captureFrame({ sim, level: levelNames, observed: [] });
+      expect(frame.objects).toEqual([
+        { x: 0, y: 0, vx: 0, vy: 0, expended: false, observed: false },
+      ]);
+    });
+
+    test('predicted: null (no observation yet) draws as unobserved, not the live position', () => {
+      const sim = launchedSim();
+      const liveX = sim.objects.x[0]!;
+      const frame = captureFrame({
+        sim,
+        level: levelNames,
+        observed: [{ predicted: null, expended: false }],
+      });
+      expect(frame.objects[0]).toEqual({
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        expended: false,
+        observed: false,
+      });
+      expect(frame.objects[0]!.x).not.toBe(liveX); // never the true, live state
+    });
+
+    test('a predicted position is drawn exactly, distinct from the live one', () => {
+      const sim = launchedSim();
+      const predicted = { x: 111, y: 222, vx: 3, vy: 4 };
+      const frame = captureFrame({
+        sim,
+        level: levelNames,
+        observed: [{ predicted, expended: false }],
+      });
+      expect(frame.objects[0]).toEqual({ ...predicted, expended: false, observed: true });
+      expect(frame.objects[0]!.x).not.toBe(sim.objects.x[0]!);
+    });
+
+    test('expended reflects the observation, not the live (unexpended) state', () => {
+      const sim = launchedSim();
+      expect(sim.objects.hitBody[0]).toBe(-1); // still flying, live
+      const frame = captureFrame({
+        sim,
+        level: levelNames,
+        observed: [{ predicted: { x: 1, y: 2, vx: 0, vy: 0 }, expended: true }],
+      });
+      expect(frame.objects[0]!.expended).toBe(true);
+    });
   });
 
   test('falls back to the "rock" class and a synthesised id/name when the level omits them', () => {
@@ -138,6 +201,7 @@ describe('captureFrame', () => {
         bodyClasses: [],
         names: { bodies: [], rails: [], contacts: [] },
       },
+      observed: [],
     });
     expect(frame.bodies[1]!.klass).toBe('rock');
     expect(frame.bodies[1]!.id).toBe('body-1');

@@ -6,15 +6,15 @@
     "bodies": [
       {
         "parent": -1,
-        "mu": 1.32712440018e20,
-        "radius": 6.957e8,
+        "mu": 1.32712440018e+20,
+        "radius": 695700000.0,
         "rotationPeriod": 2200000,
         "axialPhaseAtEpoch": 0
       },
       {
         "parent": 0,
-        "mu": 1.26687e17,
-        "radius": 7.1492e7,
+        "mu": 1.26687e+17,
+        "radius": 71492000.0,
         "a": 777908927640,
         "e": 0.0489,
         "argPeriapsis": 0.257,
@@ -24,9 +24,9 @@
       },
       {
         "parent": 1,
-        "mu": 5.959e12,
-        "radius": 1.8216e6,
-        "a": 4.217e8,
+        "mu": 5959000000000.0,
+        "radius": 1821600.0,
+        "a": 421700000.0,
         "e": 0.0041,
         "argPeriapsis": 0,
         "meanAnomaly0": 0,
@@ -45,17 +45,40 @@
       }
     ],
     "contacts": [],
-    "post": { "host": 2, "longitude": 0 },
+    "post": {
+      "host": 2,
+      "longitude": 0
+    },
     "historyTicks": 198,
-    "probe": { "dryMass": 400, "propellantMass": 400, "exhaustVelocity": 3000, "thrust": 500 },
-    "streams": ["debris_ejection"]
+    "probe": {
+      "dryMass": 400,
+      "propellantMass": 400,
+      "exhaustVelocity": 3000,
+      "thrust": 500
+    },
+    "streams": [
+      "debris_ejection"
+    ]
   },
   "seed": 12345,
   "log": [
-    { "tick": 0, "kind": "launch", "rail": 0, "heading": 3447904301, "speed": 35000000 },
-    { "tick": 2997, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
+    {
+      "tick": 0,
+      "kind": "launch",
+      "rail": 0,
+      "heading": 3447904301,
+      "speed": 35000000
+    },
+    {
+      "tick": 2277,
+      "kind": "burn",
+      "probe": 0,
+      "atTick": 3000,
+      "prograde": 200000,
+      "lateral": 50000
+    }
   ],
   "ticks": 6000,
   "expectedHash": "47448f64f618030a",
-  "simVersion": 4
+  "simVersion": 5
 }

@@ -1,7 +1,7 @@
 ---
 id: GRV-0030
 epic: EPIC-07
-status: todo
+status: done
 ---
 # GRV-0030 Telemetry and the information horizon
 
@@ -37,3 +37,14 @@ events reach the player when their telemetry lands (ADR-0007 §5-6, §8; GAME-00
 - Level 01 (post on the rail's host) looks and behaves as before to within one tick.
 
 **Verification.** `pnpm check`, `pnpm e2e`, screenshots.
+
+**Delivered.** `pnpm check`/`pnpm e2e`/`pnpm headless`/`pnpm docs:validate`/`pnpm screenshot
+--debug` all green (docs/evidence/GRV-0030/README.md has the full output). Along the way, fixed
+(team-lead authorized, each filed and resolved): `sampleState`'s `t0 === sim.tick` boundary,
+`segmentBlocked`'s catastrophic cancellation at astronomical distances, and `evaluateLaunch`'s own
+uplink-delay blindness (`src/levels/solve.ts`) — the last of which also required re-solving
+`tests/golden/flyby-burn.json`'s committed burn (a real, six-orders-of-magnitude occlusion the old
+check missed) and bumping `SIM_VERSION` to 5. `T01-far-post` is solved by the normal
+`pnpm levels:solve --write` pipeline. Two further gaps found and filed but not fixed (out of
+scope, see the evidence): `warpToEvent()`'s dead zone before a delayed launch materialises, and
+`ghost.ts`'s lazy burn issuance not crossing a long occlusion stretch.

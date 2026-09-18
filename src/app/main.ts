@@ -234,6 +234,7 @@ const plotController: PlotController = createPlotController({
   refs: plot,
   getFrame: () => app.frame(),
   getTrails: () => app.trails(),
+  getPredictedTails: () => app.predictedTails(),
   getSelection: () => app.selection(),
   getPlanner: getPlannerFrame,
   onSelect: onCanvasSelect,
@@ -392,5 +393,7 @@ const driver: DebugApiDriver = {
   commitPlan: () => app.commitPlan(),
   setHorizon: (tick) => app.setHorizon(tick),
   planSolution: () => app.planSolution(),
+  observed: (index) => app.observed(index),
+  delay: (selection) => app.delay(selection),
 };
 installDebugApi(driver);

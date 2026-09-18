@@ -7,11 +7,13 @@
 // `advance` does -- it only reads what the session already computed).
 import { createDebugSession } from './debug-api.ts';
 import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts';
-import { diffEvents, sampleClosestApproach } from './events.ts';
-import type { EventSnapshot, RangeTrend, SimEvent } from './events.ts';
+import { diffObservedEvents, sampleClosestApproach } from './events.ts';
+import type { ObservedEventObject, RangeTrend, SimEvent } from './events.ts';
 import { getLevel, levelIds } from './levels.ts';
 import type { CompiledLevel } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
+import { createObservedCache } from './observed.ts';
+import type { ObservedCache, ObservedObject } from './observed.ts';
 import { predictProbe } from './predict.ts';
 import {
   GHOST_HORIZON_TICKS,
@@ -35,7 +37,7 @@ import type { ReadoutRow, Selection } from './selection.ts';
 import { getSolution } from './solutions.ts';
 import type { CompiledSolution } from './solutions.ts';
 import { formatSimTime } from './time.ts';
-import { createTrailSet, resetTrailSet, sampleTrailSet, trailPoints } from './trails.ts';
+import { createTrailSet, resetTrailSet, sampleObservedTrailSet, trailPoints } from './trails.ts';
 import type { TrailSet } from './trails.ts';
 import {
   WARP_LADDER,
@@ -52,6 +54,7 @@ import type { FlightPlan } from '../planner/plan.ts';
 import type { Ghost } from '../planner/ghost.ts';
 import { solutionReadout } from '../planner/readout.ts';
 import type { SolutionReadout } from '../planner/readout.ts';
+import { formatDuration } from '../ui/format.ts';
 
 const EMPTY_LEVEL_NAMES: FrameLevelNames = {
   bodyIds: [],
@@ -146,9 +149,22 @@ export interface App {
   /** A read-only render snapshot of the loaded session at its current tick (src/render/frame.ts);
    *  throws if nothing is loaded, like `state()`/`hash()`. */
   frame(): Frame;
-  /** Every dynamic object's flown trail so far, keyed by object index (src/app/trails.ts) --
-   *  sampled once per tick `step`/`warpTo` actually advanced, never derived. */
+  /** Every dynamic object's *observed* trail so far, keyed by object index (src/app/trails.ts) --
+   *  positions at emission ticks up to the object's last observation (GRV-0030, GAME-0002 §4
+   *  "Solid, one pixel | Observed"), sampled once per tick `step`/`warpTo` actually advanced,
+   *  never the live trajectory. */
   trails(): ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** Every dynamic object's dotted, fading predicted tail (GRV-0030, GAME-0002 §4 "Extrapolated
+   *  from a stale observation"): `[observation, ...tail]`, oldest first, the same current-tick
+   *  data `observed()` already carries -- an object with no observation, or nothing predicted
+   *  beyond it, is simply absent (the render/plot.ts convention `trails()` already follows). */
+  predictedTails(): ReadonlyMap<number, readonly { x: number; y: number }[]>;
+  /** `index`'s own observed view as of the current tick (GRV-0030, src/app/observed.ts) -- `null`
+   *  for an out-of-range index or nothing loaded. */
+  observed(index: number): ObservedObject | null;
+  /** One-way delay to `selection`, in seconds (GAME-0002 §8's status bar `DELAY`, GRV-0030) --
+   *  `null` for a body, no selection, or nothing loaded. */
+  delay(selection: Selection): number | null;
   /** Sets the app's selection state (GRV-0023): the renderer only ever reads it back through
    *  `frame()`'s sibling, the plot controller's own selection arg -- the app owns it. */
   select(selection: Selection): void;
@@ -255,16 +271,6 @@ const NO_STATE: StatusValues = {
   event: DASH,
 };
 
-/** `snap`'s own contact state, matching events.ts's `EventContactState`, before anything has been
- *  sampled for it yet -- `diffEvents`'s own `before` for the tick a level was just loaded at. */
-function initialEventSnapshot(snap: StateSnapshot): EventSnapshot {
-  return {
-    tick: snap.tick,
-    objects: [],
-    contacts: snap.contacts.map((c) => ({ cleared: c.cleared !== 0, impactTick: c.impactTick })),
-  };
-}
-
 export function createApp({ onChange }: { onChange: (change: AppChange) => void }): App {
   const session = createDebugSession();
   let ready = false;
@@ -283,25 +289,32 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   let currentLevel: CompiledLevel | null = null;
   let plannerState: PlannerState = createPlannerState();
 
-  // Events (GRV-0027): the session's own append-only log, the per-tick diff cursor, each
-  // (probe, contact) pair's closest-approach trend, the pending-invert flag `step` arms and
-  // `takePendingInvert` consumes, and the warp-to-event target `step` clamps to.
+  // Events (GRV-0027, GRV-0030): the session's own append-only log, the per-tick observed-diff
+  // cursor, each (probe, contact) pair's closest-approach trend, the pending-invert flag `step`
+  // arms and `takePendingInvert` consumes, and the warp-to-event target `step` clamps to.
   let eventLog: SimEvent[] = [];
-  let lastEventSnapshot: EventSnapshot | null = null;
+  let lastObserved: ObservedEventObject[] = [];
   const rangeTrends = new Map<string, RangeTrend>();
   let pendingInvert = false;
   let warpTarget: number | null = null;
   // Keyed by probe index; invalidated by log length rather than reference (debug-api.ts's log is
   // mutated in place by `command`, so `session.log()` never changes reference within a session).
   const predictionCache = new Map<number, { atLogLength: number; events: SimEvent[] }>();
+  // The observed view (GRV-0030, src/app/observed.ts): the replay cache (persists for the loaded
+  // session's whole lifetime, GRV-0030 module doc) and every object's own latest view, refreshed
+  // once per `step`.
+  let observedCache: ObservedCache = createObservedCache();
+  let currentObserved: ObservedObject[] = [];
 
-  function resetEvents(snap: StateSnapshot | undefined): void {
+  function resetEvents(): void {
     eventLog = [];
-    lastEventSnapshot = snap ? initialEventSnapshot(snap) : null;
+    lastObserved = [];
     rangeTrends.clear();
     pendingInvert = false;
     warpTarget = null;
     predictionCache.clear();
+    observedCache = createObservedCache();
+    currentObserved = [];
   }
 
   function probeTag(index: number): string {
@@ -354,12 +367,13 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   function statusValues(): StatusValues {
     if (!ready || currentDt === null) return NO_STATE;
     const lastEvent = lastEventForStatus();
+    const delaySeconds = session.delay(currentSelection);
     return {
       time: formatSimTime({ tick: session.state().tick, dt: currentDt }),
       warp: `${ticksPerFrame(rung)}x`,
       warpEffective: `${effectiveTicksThisFrame(rung)}x`,
       post: postName,
-      delay: DASH,
+      delay: delaySeconds === null ? DASH : formatDuration(delaySeconds),
       event: lastEvent ? eventText(lastEvent) : DASH,
     };
   }
@@ -387,14 +401,15 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       currentSolution = null;
       plannerState = createPlannerState();
       resetTrailSet(trailSet);
-      resetEvents(undefined);
+      resetEvents();
       emit({ id, knownIds: levelIds() }, true);
       return undefined;
     }
     const snap = session.load({ scenario: level.scenario, seed: level.seed });
     currentDt = level.scenario.dt;
-    const hostBody = level.scenario.rails[0]?.host;
-    postName = hostBody === undefined ? DASH : (level.names.bodies[hostBody] ?? DASH);
+    // The post's own host (GRV-0030) -- not necessarily a rail's host (T01-far-post's post sits on
+    // the system primary, nowhere near any rail).
+    postName = level.names.bodies[level.scenario.post.host] ?? DASH;
     brief = { name: level.name, text: level.brief };
     levelNames = level;
     currentLevelId = level.id;
@@ -404,7 +419,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
-    resetEvents(snap);
+    resetEvents();
     ready = true;
     emit(null, true);
     return snap;
@@ -423,7 +438,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
-    resetEvents(snap);
+    resetEvents();
     ready = true;
     emit(null, true);
     return snap;
@@ -575,48 +590,67 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     };
   }
 
-  /** Advances the loaded session by `ticks`, sampling trails and events once per tick (extending
-   *  trails.ts's own per-tick sampling point rather than adding a second loop) -- returns whether
-   *  any event landed, for `step`'s own automatic-drop decision. */
+  /** Advances the loaded session by `ticks`, sampling the observed trail and telemetry events
+   *  once per tick (GRV-0030 -- extending trails.ts's own per-tick sampling point rather than
+   *  adding a second loop) -- returns whether any event landed, for `step`'s own automatic-drop
+   *  decision. Closest approach stays fed from live positions (events.ts's own module doc: it's a
+   *  prediction, never a telemetry event). */
   function advanceAndAccumulateEvents(ticks: number): boolean {
+    if (!currentLevel) return false;
     let landed = false;
-    session.stepSampled(ticks, (positions, sample) => {
-      sampleTrailSet(trailSet, positions);
+    session.stepSampled({
+      ticks,
+      level: currentLevel,
+      cache: observedCache,
+      onTick: (positions, sample) => {
+        sampleObservedTrailSet(
+          trailSet,
+          sample.observed.map((o) => o.observation),
+        );
+        currentObserved = sample.observed;
 
-      const after: EventSnapshot = {
-        tick: sample.tick,
-        objects: sample.objects,
-        contacts: sample.contacts,
-      };
-      if (lastEventSnapshot) {
-        const edges = diffEvents({ before: lastEventSnapshot, after });
+        const edges = diffObservedEvents({
+          before: lastObserved,
+          after: sample.observed,
+          atTick: sample.tick,
+        });
         if (edges.length > 0) landed = true;
         eventLog.push(...edges);
-      }
-      lastEventSnapshot = after;
+        // Carries the *last successful* observation forward through a blackout (GRV-0030: a
+        // fixed contact's host rotating the post out of view for a while is real, and observing
+        // an object again once it clears must never read as a fresh launch or re-fire an edge
+        // against a reset baseline) -- an index whose new observation is null keeps its held
+        // entry; one that resolved adopts the fresh state.
+        sample.observed.forEach((obs, i) => {
+          if (obs.observation) lastObserved[i] = obs;
+        });
 
-      for (let c = 0; c < sample.contacts.length; c++) {
-        if (sample.contacts[c]!.cleared) continue;
-        const contactPos = sample.contactPositions[c]!;
-        for (let i = 0; i < sample.objects.length; i++) {
-          const obj = sample.objects[i]!;
-          if (obj.hitContact !== -1 || obj.hitBody !== -1) continue;
-          const range = Math.hypot(positions[i]!.x - contactPos.x, positions[i]!.y - contactPos.y);
-          const key = `${i}:${c}`;
-          const { trend, event } = sampleClosestApproach({
-            prior: rangeTrends.get(key) ?? null,
-            tick: sample.tick,
-            probe: i,
-            contact: c,
-            range,
-          });
-          rangeTrends.set(key, trend);
-          if (event) {
-            eventLog.push(event);
-            landed = true;
+        for (let c = 0; c < sample.contacts.length; c++) {
+          if (sample.contacts[c]!.cleared) continue;
+          const contactPos = sample.contactPositions[c]!;
+          for (let i = 0; i < sample.objects.length; i++) {
+            const obj = sample.objects[i]!;
+            if (obj.hitContact !== -1 || obj.hitBody !== -1) continue;
+            const range = Math.hypot(
+              positions[i]!.x - contactPos.x,
+              positions[i]!.y - contactPos.y,
+            );
+            const key = `${i}:${c}`;
+            const { trend, event } = sampleClosestApproach({
+              prior: rangeTrends.get(key) ?? null,
+              tick: sample.tick,
+              probe: i,
+              contact: c,
+              range,
+            });
+            rangeTrends.set(key, trend);
+            if (event) {
+              eventLog.push(event);
+              landed = true;
+            }
           }
         }
-      }
+      },
     });
     return landed;
   }
@@ -763,13 +797,22 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     },
     frame: () => {
       const t = plannerState.horizon === null ? undefined : plannerState.horizon * (currentDt ?? 0);
-      return session.captureFrame(levelNames, t);
+      return session.captureFrame(levelNames, currentObserved, t);
     },
     trails: () => {
       const points = new Map<number, readonly { x: number; y: number }[]>();
       trailSet.buffers.forEach((buffer, index) => points.set(index, trailPoints(buffer)));
       return points;
     },
+    predictedTails: () => {
+      const tails = new Map<number, readonly { x: number; y: number }[]>();
+      currentObserved.forEach((view, index) => {
+        if (view.observation) tails.set(index, [view.observation, ...view.tail]);
+      });
+      return tails;
+    },
+    observed: (index) => currentObserved[index] ?? null,
+    delay: (selection) => session.delay(selection),
     select: (sel) => {
       currentSelection = sel;
       emit();

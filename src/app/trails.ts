@@ -68,3 +68,20 @@ export function sampleTrailSet(
     pushTrailSample(trailSet.buffers[i]!, positions[i]!.x, positions[i]!.y);
   }
 }
+
+/** Samples every object's *observed* position, one entry per `sim.objects` index (GRV-0030,
+ *  GAME-0002 §4 "Solid, one pixel | Observed"): the solid trail is the post's own confirmed
+ *  history, never the live trajectory `sampleTrailSet` above samples -- an index with no
+ *  observation yet (before first light, or the whole call blacked out) is skipped rather than
+ *  padded, so the trail simply doesn't grow that tick instead of recording a wrong point. */
+export function sampleObservedTrailSet(
+  trailSet: TrailSet,
+  observations: readonly ({ x: number; y: number } | null)[],
+): void {
+  for (let i = 0; i < observations.length; i++) {
+    const point = observations[i];
+    if (!point) continue;
+    trailSet.buffers[i] ??= createTrailBuffer(trailSet.capacity);
+    pushTrailSample(trailSet.buffers[i]!, point.x, point.y);
+  }
+}
