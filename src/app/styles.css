@@ -107,10 +107,14 @@ body {
   height: 100%;
 }
 
+/* GRV-0022: `display: flex` on the bare class beat the UA stylesheet's `[hidden] { display: none }`
+   (equal specificity, author wins), so `error.hidden = true` never actually hid this -- an opaque,
+   ground-coloured div sat over the whole plot region and ate every pointer event even while
+   "hidden", which is what GRV-0021's own before/after screenshots (ground-on-ground, GAME-0002
+   §2) never caught. Scoping `display: flex` to `:not([hidden])` is the standard fix. */
 .plot-error {
   position: absolute;
   inset: 0;
-  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -119,6 +123,10 @@ body {
   background: var(--ground);
   color: var(--alarm);
   text-align: center;
+}
+
+.plot-error:not([hidden]) {
+  display: flex;
 }
 
 .plot-error-title {
@@ -164,6 +172,21 @@ body {
   font-size: 12px;
   color: var(--text-primary);
   line-height: 1.5;
+}
+
+/* The scale bar's label and the zoom readout (GAME-0002 §6, §3's "text on the plot uses the mono
+   font at 10/13 px") are drawn ON the canvas itself, bottom-right (src/render/plot.ts) -- real
+   instrument text, not a DOM overlay. This is their ADR-0004 §2 twin: the actual
+   `data-readout="plot.scale"`/`"plot.zoom"` text a verifier reads, visually hidden (a canvas has
+   no text a verifier can read back as a string) so it never doubles the canvas's own label and
+   collides with it. */
+.plot-readouts {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .selection-panel,

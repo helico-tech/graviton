@@ -1,19 +1,24 @@
-// App bootstrap (GRV-0021): builds the four-region shell (GAME-0002 §8), loads the level named in
-// the URL, wires the warp ladder to the keyboard, and drives the fixed-step loop outside debug
-// mode. `?debug=1` installs window.graviton instead of animating (ADR-0004 §1).
+// App bootstrap (GRV-0021, GRV-0022): builds the four-region shell (GAME-0002 §8), loads the level
+// named in the URL, wires the warp ladder to the keyboard and the plot's camera to wheel/drag,
+// and drives the fixed-step loop outside debug mode. `?debug=1` installs window.graviton instead
+// of animating (ADR-0004 §1).
 import './styles.css';
 import { createApp } from './app.ts';
+import type { App } from './app.ts';
 import { installDebugApi } from './debug-api.ts';
+import type { DebugApiDriver } from './debug-api.ts';
 import { WARP_EASE_MS, easedWarpValue, effectiveTicksThisFrame } from './loop.ts';
 import { ticksPerFrame } from './warp.ts';
 import {
   clearPlot,
+  createPlotController,
   createPlotRegion,
   hideBrief,
   hidePlotError,
   showBrief,
   showPlotError,
 } from '../ui/plot.ts';
+import type { PlotController } from '../ui/plot.ts';
 import { createSelectionPanel, createTimelineStrip } from '../ui/panels.ts';
 import { createStatusBar, renderStatus } from '../ui/status.ts';
 
@@ -24,6 +29,11 @@ const debug = params.get('debug') === '1';
 const levelId = params.get('level') ?? 'L01-intercept';
 const tickParam = params.get('tick');
 const warpParam = params.get('warp');
+const widthParam = params.get('w');
+const heightParam = params.get('h');
+const zoomParam = params.get('zoom');
+const cxParam = params.get('cx');
+const cyParam = params.get('cy');
 
 const root = document.getElementById('app');
 if (!root) throw new Error('main: #app is missing from index.html');
@@ -36,19 +46,40 @@ const selection = createSelectionPanel();
 const timeline = createTimelineStrip({ buildSha: __BUILD_SHA__ });
 root.append(status.element, plot.element, selection, timeline);
 
-const app = createApp({
-  onChange: ({ status: values, plotError, brief }) => {
+let showingError = false;
+
+// `onChange` references `plotController`, declared below -- fine, since `onChange` only ever
+// runs once `app.loadLevel`/`step` are called further down this file, well after
+// `plotController` is assigned.
+const app: App = createApp({
+  onChange: ({ status: values, plotError, brief, justLoaded }) => {
     renderStatus(status, values);
+    if (justLoaded) plotController.resetView();
+    showingError = plotError !== null;
     if (plotError) {
       showPlotError(plot, plotError);
+      clearPlot(plot);
     } else {
       hidePlotError(plot);
-      clearPlot(plot);
+      plotController.render();
     }
     if (brief) showBrief(plot, brief);
     else hideBrief(plot);
   },
 });
+
+const plotController: PlotController = createPlotController({
+  refs: plot,
+  getFrame: () => app.frame(),
+  getTrails: () => app.trails(),
+});
+plotController.attachInput();
+
+// ?w=&h= size the plot canvas directly rather than from its DOM box, so a shot is reproducible
+// independent of the browser window (ADR-0004 §1).
+if (widthParam !== null && heightParam !== null) {
+  plotController.setCanvasSize({ width: Number(widthParam), height: Number(heightParam) });
+}
 
 app.loadLevel(levelId);
 // ?tick=<n> reproduces a shot at a given moment, then pauses; ?warp=<rung> sets the rung for the
@@ -57,7 +88,20 @@ if (tickParam !== null) app.warpTo(Number(tickParam));
 if (warpParam !== null) app.setWarp(Number(warpParam));
 else if (tickParam !== null) app.setWarp(0);
 
-window.addEventListener('resize', () => clearPlot(plot));
+// ?zoom=<metres per pixel>&cx=<>&cy=<> reproduce a specific view; each is independently optional.
+if (zoomParam !== null || cxParam !== null || cyParam !== null) {
+  plotController.setView({
+    ...(zoomParam !== null ? { metresPerPixel: Number(zoomParam) } : {}),
+    ...(cxParam !== null ? { centreX: Number(cxParam) } : {}),
+    ...(cyParam !== null ? { centreY: Number(cyParam) } : {}),
+  });
+  if (!showingError) plotController.render();
+}
+
+window.addEventListener('resize', () => {
+  if (showingError) clearPlot(plot);
+  else plotController.render();
+});
 
 // The warp change ease (GAME-0002 §9): only the displayed WARP label tweens over ~150 ms, driven
 // entirely by this rAF loop -- disabled in debug mode simply because that loop never starts
@@ -85,7 +129,7 @@ window.addEventListener('keydown', (event) => {
 if (!debug) {
   const frame = (now: number): void => {
     const ticks = effectiveTicksThisFrame(app.warpRung());
-    if (ticks > 0) app.step(ticks);
+    if (ticks > 0) app.step(ticks); // step's onChange already re-renders the plot
 
     if (warpAnim) {
       const elapsed = now - warpAnim.start;
@@ -102,4 +146,19 @@ if (!debug) {
   requestAnimationFrame(frame);
 }
 
-installDebugApi(app);
+const driver: DebugApiDriver = {
+  loadLevel: (id) => app.loadLevel(id),
+  load: (args) => app.load(args),
+  command: (cmd) => app.command(cmd),
+  step: (ticks) => app.step(ticks),
+  warpTo: (tick) => app.warpTo(tick),
+  setWarp: (rung) => app.setWarp(rung),
+  hash: () => app.hash(),
+  state: () => app.state(),
+  run: (args) => app.run(args),
+  render: () => plotController.render(),
+  frameHash: () => plotController.frameHash(),
+  view: () => plotController.getView(),
+  setView: (patch) => plotController.setView(patch),
+};
+installDebugApi(driver);

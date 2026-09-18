@@ -14,6 +14,9 @@ import { advance, createSim, hashSim } from '../sim/sim.ts';
 import type { Command, Scenario, Sim } from '../sim/sim.ts';
 import { SIM_VERSION } from '../sim/version.ts';
 import { readAllReadouts } from '../ui/readouts.ts';
+import { captureFrame as captureFrameOf } from '../render/frame.ts';
+import type { Frame, FrameLevelNames } from '../render/frame.ts';
+import type { View } from '../render/camera.ts';
 
 declare const __BUILD_SHA__: string;
 
@@ -70,8 +73,22 @@ export interface DebugSession {
    *  dropped command. */
   command(cmd: Command): void;
   step(ticks: number): StateSnapshot;
+  /** `step`, but advancing one tick at a time and calling `onTick` with every live object's
+   *  position after each tick -- the shared "tick-advance-with-trails" loop app.ts and
+   *  src/headless/render.ts both drive (GRV-0022 design), so a trail is sampled once per
+   *  simulation tick regardless of how many ticks a single call advances (a warp frame stepping
+   *  hundreds of ticks still samples every one of them, just more cheaply than a full
+   *  `StateSnapshot` copy per tick would). */
+  stepSampled(
+    ticks: number,
+    onTick: (positions: readonly { x: number; y: number }[]) => void,
+  ): StateSnapshot;
   hash(): string;
   state(): StateSnapshot;
+  /** A read-only render snapshot of the loaded `Sim` at its current tick (src/render/frame.ts) --
+   *  the one place outside `src/render` a live `Sim` is read for drawing; `Sim` itself never
+   *  leaves this module. */
+  captureFrame(level: FrameLevelNames): Frame;
   /** Runs a fresh, independent `Sim` to completion and reports its hash and
    *  final tick -- the loaded session (if any) is untouched. */
   run(args: RunArgs): RunResult;
@@ -144,12 +161,28 @@ export function createDebugSession(): DebugSession {
       return snapshot(s);
     },
 
+    stepSampled(ticks, onTick) {
+      const s = loaded();
+      for (let i = 0; i < ticks; i++) {
+        advance({ sim: s, log, ticks: 1 });
+        const o = s.objects;
+        const positions: { x: number; y: number }[] = new Array(o.count);
+        for (let j = 0; j < o.count; j++) positions[j] = { x: o.x[j]!, y: o.y[j]! };
+        onTick(positions);
+      }
+      return snapshot(s);
+    },
+
     hash() {
       return hashSim(loaded());
     },
 
     state() {
       return snapshot(loaded());
+    },
+
+    captureFrame(level) {
+      return captureFrameOf({ sim: loaded(), level });
     },
 
     run({ scenario, seed, log: runLog, ticks }) {
@@ -174,6 +207,16 @@ export interface DebugApiDriver {
   hash(): string;
   state(): StateSnapshot;
   run(args: RunArgs): RunResult;
+  /** One synchronous frame of the plot at the current state (GRV-0022, ADR-0004 §1): draws, does
+   *  not advance anything. Implemented in main.ts by composing the DOM-free `App` above with
+   *  src/ui/plot.ts's canvas-owning controller -- `App` itself stays DOM-free. */
+  render(): void;
+  /** FNV-1a over the plot canvas's RGBA bytes (src/sim/state/hash.ts), comparable only under one
+   *  renderer key (research §3: Playwright's Chromium and `@napi-rs/canvas` draw 7% of pixels
+   *  differently). */
+  frameHash(): string;
+  view(): View;
+  setView(patch: Partial<View>): void;
 }
 
 export interface DebugApi {
@@ -203,6 +246,12 @@ export interface DebugApi {
    *  reads the live DOM, not app-internal state, so a broken panel fails this even when the
    *  simulation underneath is correct. */
   readouts(): Record<string, string>;
+  render(): void;
+  frameHash(): string;
+  /** A copy of the plot's current camera state -- mutating it does nothing (GRV-0022 acceptance
+   *  "view() returns a copy"); call `setView` to change it. */
+  view(): View;
+  setView(patch: Partial<View>): void;
 }
 
 declare global {
@@ -241,6 +290,10 @@ export function installDebugApi(driver: DebugApiDriver): void {
     state: () => driver.state(),
     run: (args) => driver.run(args),
     readouts: () => readAllReadouts(document),
+    render: () => driver.render(),
+    frameHash: () => driver.frameHash(),
+    view: () => driver.view(),
+    setView: (patch) => driver.setView(patch),
   };
   window.graviton = api;
 
