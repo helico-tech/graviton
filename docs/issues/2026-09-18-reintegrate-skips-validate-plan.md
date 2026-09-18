@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -17,3 +17,5 @@ before the launch and the log cursor skips it), so the SOLUTION panel lies. `rei
 validate and show issues instead of a ghost, like a cone rejection.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0028, commit 7043fe5. planner.ts: reintegrate runs validatePlan against the (re-snapped) draft before integrateGhost ever sees it; issues surface on PlannerState.issues, ghost stays null, no throw and no silently-dropped node.

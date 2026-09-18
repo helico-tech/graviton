@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -16,3 +16,5 @@ uncaught in the Commit click handler while the button stays enabled. Commit must
 revalidate the draft first.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0028, commit 7043fe5. app.ts: step re-snaps a stale draft on every tick advance (endDrag too); commitPlan re-snaps first and returns { committed: false, issues } instead of throwing.
