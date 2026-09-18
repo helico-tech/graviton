@@ -94,6 +94,10 @@ export interface StepScratch {
   /** One preallocated index buffer per level, sized to capacity. */
   groupIndex: Int32Array[];
   groupCount: Int32Array;
+  /** Scratch ephemeris for the light-cone solvers and the post (lightcone.ts, post.ts): never
+   *  touched by the tick loop itself, so a command's own light-cone solve (which can run between
+   *  ticks, mid-`advance`) never clobbers `eph`/`tickStartEph`, and vice versa. */
+  lightconeEph: EphemerisOut;
 }
 
 export function createStepScratch({
@@ -120,6 +124,7 @@ export function createStepScratch({
     objStartY: new Float64Array(capacity),
     groupIndex,
     groupCount: new Int32Array(L_MAX + 1),
+    lightconeEph: makeEph(bodies.count),
   };
 }
 

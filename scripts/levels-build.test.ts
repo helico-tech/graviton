@@ -33,6 +33,9 @@ probes:
     maxThrust: 9.4 kN
     nodeBudget: 4
 contacts: []
+post:
+  host: star
+  longitude: 0 deg
 `;
 
 let levelsDir: string;

@@ -62,6 +62,9 @@ contacts:
     longitude: 0 deg
     captureRadius: 40 km
     clearedBy: { minimumImpactEnergy: 2.4 TJ }
+post:
+  host: planet
+  longitude: 0 deg
 `;
 
 const PATH = 'T00-fixture.level.yaml';

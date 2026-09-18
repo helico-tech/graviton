@@ -87,3 +87,9 @@ contacts:
     captureRadius: 35 km
     clearedBy:
       minimumImpactEnergy: 5 TJ
+
+# GRV-0029: the post sits exactly on the rail's own host and longitude, so the launch arrives
+# within the same tick (ADR-0007 §2) -- the committed solution's impact tick is unaffected.
+post:
+  host: meskel
+  longitude: 0 deg

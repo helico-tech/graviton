@@ -17,12 +17,14 @@ import { readAllReadouts } from '../ui/readouts.ts';
 import { evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { contactPoint } from '../sim/contacts.ts';
+import { postPosition } from '../sim/post.ts';
 import { captureFrame as captureFrameOf } from '../render/frame.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
 import type { View } from '../render/camera.ts';
 import { describeSelection as describeSelectionOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
 import type { EventContactState, EventObjectState, SimEvent } from './events.ts';
+import { planToCommands } from '../planner/plan.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import type { SolutionReadout } from '../planner/readout.ts';
 
@@ -61,6 +63,10 @@ export interface StateSnapshot {
   bodies: BodySnapshot[];
   objects: ObjectSnapshot[];
   contacts: ContactSnapshot[];
+  /** The post's current world position (ADR-0007 §1, GRV-0029): like bodies, always the post's
+   *  true current position -- only observations of dynamic objects are delayed (determinism rule
+   *  12), the post itself is not. */
+  post: BodySnapshot;
 }
 
 /** Every live object's/contact's event-relevant state at one tick (GRV-0027, events.ts), plus
@@ -104,6 +110,12 @@ export interface DebugSession {
    *  back), so this is caught here rather than surfacing later as a
    *  dropped command. */
   command(cmd: Command): void;
+  /** Appends `planToCommands({ sim: <the loaded Sim>, plan, probeIndex })` to the log (app.ts's
+   *  `commitPlan`, GRV-0029): `planToCommands` needs a `Sim` to solve the launch's own light-cone
+   *  issue tick (`issueTickFor`, sim/lightcone.ts), and `Sim` itself never leaves this module (the
+   *  same boundary `captureFrame`/`describeSelection` already keep) -- so committing a plan is a
+   *  session method, not something app.ts can do by hand-calling `planToCommands`. */
+  commitPlan(args: { plan: FlightPlan; probeIndex: number }): void;
   /** The committed log exactly as `advance` would replay it (GRV-0026): the planner's own
    *  reintegration (src/app/planner.ts's `reintegrate`) needs it to reproduce the world up to a
    *  draft's launch tick, the same way `integrateGhost` itself replays "everything already
@@ -195,7 +207,16 @@ function snapshot(sim: Sim): StateSnapshot {
     });
   }
 
-  return { tick: sim.tick, count: o.count, bodies, objects, contacts };
+  const post = postPosition({ sim, tick: sim.tick });
+
+  return {
+    tick: sim.tick,
+    count: o.count,
+    bodies,
+    objects,
+    contacts,
+    post: { x: post.x, y: post.y },
+  };
 }
 
 export function createDebugSession(): DebugSession {
@@ -207,6 +228,16 @@ export function createDebugSession(): DebugSession {
     return sim;
   }
 
+  function pushCommand(s: Sim, cmd: Command): void {
+    const currentTick = Math.max(s.tick, log.at(-1)?.tick ?? s.tick);
+    if (cmd.tick < currentTick) {
+      throw new Error(
+        `debug session: command tick ${cmd.tick} precedes current tick ${currentTick}`,
+      );
+    }
+    log.push(cmd);
+  }
+
   return {
     load({ scenario, seed }) {
       sim = createSim({ scenario, seed });
@@ -215,14 +246,12 @@ export function createDebugSession(): DebugSession {
     },
 
     command(cmd) {
+      pushCommand(loaded(), cmd);
+    },
+
+    commitPlan({ plan, probeIndex }) {
       const s = loaded();
-      const currentTick = Math.max(s.tick, log.at(-1)?.tick ?? s.tick);
-      if (cmd.tick < currentTick) {
-        throw new Error(
-          `debug session: command tick ${cmd.tick} precedes current tick ${currentTick}`,
-        );
-      }
-      log.push(cmd);
+      for (const command of planToCommands({ sim: s, plan, probeIndex })) pushCommand(s, command);
     },
 
     log: () => log,

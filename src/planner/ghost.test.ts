@@ -189,10 +189,11 @@ describe('ghost invariant: level 01, committed solution, no amendments', () => {
     const horizonTick = solution.ticks;
     const { ghost } = integrateGhost({ level, log: [], plan, fromTick, horizonTick });
 
+    const referenceSim = createSim({ scenario: level.scenario, seed: level.seed });
     const reference = liveReferenceSamples({
       scenario: level.scenario,
       seed: level.seed,
-      commands: planToCommands({ plan, probeIndex: 0 }),
+      commands: planToCommands({ sim: referenceSim, plan, probeIndex: 0 }),
       probeIndex: 0,
       fromTick,
       horizonTick,
@@ -276,9 +277,11 @@ describe('ghost invariant: flyby-burn golden, its burn node plus a second, among
     const horizonTick = golden.ticks;
     const { ghost } = integrateGhost({ level, log: otherProbes, plan, fromTick, horizonTick });
 
-    const commands = [...otherProbes, ...planToCommands({ plan, probeIndex: 0 })].sort(
-      (a, b) => a.tick - b.tick,
-    );
+    const referenceSim = createSim({ scenario: level.scenario, seed: level.seed });
+    const commands = [
+      ...otherProbes,
+      ...planToCommands({ sim: referenceSim, plan, probeIndex: 0 }),
+    ].sort((a, b) => a.tick - b.tick);
     const reference = liveReferenceSamples({
       scenario: level.scenario,
       seed: level.seed,
@@ -342,9 +345,13 @@ describe('ghost cache', () => {
       cache: cache1,
     });
 
-    // Resumed from node 1's own checkpoint (atTick 2000), not from fromTick: far fewer ticks than
-    // a full re-integration -- the cached-prefix proof the unit asks for.
-    expect(ghost2.ticksIntegrated).toBe(horizonTick - plan1.nodes[1]!.atTick);
+    // Resumed from node 1's own checkpoint -- taken at its own issue tick (issueTickFor, ADR-0007
+    // §2: the latest tick that still gets it to the probe by atTick 2000, not atTick itself, so a
+    // resume can still substitute a fresh command for a node not yet issued -- module header),
+    // read back from cache1 itself rather than re-derived: far fewer ticks than a full
+    // re-integration either way, the cached-prefix proof the unit asks for.
+    const node1IssueTick = cache1.checkpoints[1]!.tick;
+    expect(ghost2.ticksIntegrated).toBe(horizonTick - node1IssueTick);
     expect(ghost2.ticksIntegrated).toBeLessThan(ghost1.ticksIntegrated);
 
     const { ghost: coldGhost2 } = integrateGhost({

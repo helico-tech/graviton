@@ -36,6 +36,8 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
     ],
     rails: [DEFAULT_RAIL],
     contacts: [],
+    post: { host: 0, longitude: 0 },
+    historyTicks: 4096,
     probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
     streams: ['debris_ejection'],
     ...overrides,
@@ -172,6 +174,10 @@ describe('launch geometry: position at a known phase', () => {
           },
         ],
         rails: [{ ...DEFAULT_RAIL, longitude }],
+        // Post at the same point as the rail (zero uplink distance, hence zero delay) so the
+        // launch still applies synchronously: this test checks applyCommand's immediate effect,
+        // not the light-cone arrival path (lightcone.test.ts covers that).
+        post: { host: 0, longitude },
       }),
       seed: 1,
     });
@@ -219,6 +225,9 @@ describe('launch geometry: velocity is the exact sum of three terms', () => {
         },
       ],
       rails: [{ ...DEFAULT_RAIL, host: 1, longitude }],
+      // Post on the same body and longitude as the rail: zero delay, so the launch still applies
+      // synchronously (this test checks the geometry, not the light-cone arrival path).
+      post: { host: 1, longitude },
     });
     const sim = createSim({ scenario: twoBody, seed: 1 });
 

@@ -18,6 +18,10 @@ export interface PrimaryBodyDef {
   rotationPeriod: number;
   /** rad, surface phase at t=0. Rail launch windows read off this. */
   axialPhaseAtEpoch: number;
+  /** m, >= 0, default 0: grazing margin added to `radius` for occlusion only (lightcone.ts's
+   *  `segmentBlocked`, research §5.5) -- an uncollidable buffer for atmosphere/plasma, never used
+   *  by the surface-collision test (step.ts), which stays exactly `radius`. */
+  atmosphereMargin?: number;
 }
 
 export interface OrbitingBodyDef {
@@ -30,6 +34,7 @@ export interface OrbitingBodyDef {
   meanAnomaly0: number;
   rotationPeriod: number;
   axialPhaseAtEpoch: number;
+  atmosphereMargin?: number;
 }
 
 export type BodyDef = PrimaryBodyDef | OrbitingBodyDef;
@@ -44,6 +49,9 @@ export interface BodyTable {
   parent: Int32Array;
   mu: Float64Array;
   radius: Float64Array;
+  /** m, >= 0: `radius` plus the grazing margin (occlusion-only, PrimaryBodyDef/OrbitingBodyDef's
+   *  own doc). Precomputed here so lightcone.ts's `segmentBlocked` never adds it per call. */
+  occlusionRadius: Float64Array;
   a: Float64Array;
   e: Float64Array;
   argPeriapsis: Float64Array;
@@ -68,6 +76,7 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
     parent: new Int32Array(count),
     mu: new Float64Array(count),
     radius: new Float64Array(count),
+    occlusionRadius: new Float64Array(count),
     a: new Float64Array(count),
     e: new Float64Array(count),
     argPeriapsis: new Float64Array(count),
@@ -94,6 +103,12 @@ export function createBodyTable(defs: BodyDef[]): BodyTable {
       throw new Error(
         `createBodyTable: body ${i} has non-positive or non-finite rotationPeriod (${def.rotationPeriod})`,
       );
+    const atmosphereMargin = def.atmosphereMargin ?? 0;
+    if (!Number.isFinite(atmosphereMargin) || atmosphereMargin < 0)
+      throw new Error(
+        `createBodyTable: body ${i} has a negative or non-finite atmosphereMargin (${atmosphereMargin})`,
+      );
+    table.occlusionRadius[i] = def.radius + atmosphereMargin;
     // docs/issues/2026-09-18-unbounded-angles-reach-trig-kernel.md: [-2pi, 2pi] is the accepted
     // range (both endpoints included), independent of the compiler's own [0, 2pi) normalisation
     // -- a body table built directly (not through compile.ts) gets the same protection.

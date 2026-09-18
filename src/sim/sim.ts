@@ -12,23 +12,34 @@ import { startBurn } from './dynamics/burn.ts';
 import { createStream } from './state/rng.ts';
 import { createHash, digest, updateFloat64, updateWord } from './state/hash.ts';
 import { selfCheck } from './selfcheck.ts';
-import { applyCommand } from './commands.ts';
+import { applyCommand, materializeArrival } from './commands.ts';
 import type { Command } from './commands.ts';
 import { createRailTable, NEVER_LAUNCHED } from './rails.ts';
 import type { RailDef, RailTable } from './rails.ts';
 import { createContactState, createContactTable } from './contacts.ts';
 import type { ContactState, ContactTable, FixedContactDef } from './contacts.ts';
+import { createHistoryBuffer, HISTORY_RECORD_BYTES, recordHistory } from './history.ts';
+import type { HistoryBuffer } from './history.ts';
+import type { PostDef } from './post.ts';
+import { createPendingArrivals, removePendingArrival } from './arrivals.ts';
+import type { PendingArrivals } from './arrivals.ts';
 import { SIM_VERSION } from './version.ts';
 
 // Re-exported so callers building a Scenario only need to import from
-// sim.ts, not reach into ephemeris/bodies.ts, rails.ts or contacts.ts
-// directly.
-export type { BodyDef, RailDef, FixedContactDef };
+// sim.ts, not reach into ephemeris/bodies.ts, rails.ts, contacts.ts or
+// post.ts directly.
+export type { BodyDef, RailDef, FixedContactDef, PostDef };
+
+// docs/work/GRV-0029: a sanity ceiling on Scenario.historyTicks, mirroring MAX_SCENARIO_ALLOCATION
+// below -- a malformed level (or a compiler bug in the ceil(2*maxSeparation/c/dt) bound,
+// levels/compile.ts) should fail loudly at load, never allocate gigabytes of ring buffer.
+const MAX_HISTORY_TICKS = 65536;
 
 // A level-load sanity limit against typos (docs/issues/2026-09-18-probe-count-unbounded.md):
 // `count: 1000000000` should fail loudly here, not allocate gigabytes. Debris caps later come
 // with their own budget, not this one.
 const MAX_SCENARIO_ALLOCATION = 4096;
+const TWO_PI = 6.283185307179586;
 
 export interface ProbeDef {
   dryMass: number;
@@ -50,6 +61,16 @@ export interface Scenario {
   bodies: BodyDef[];
   rails: RailDef[];
   contacts: FixedContactDef[];
+  /** The clearance post: a surface point like a rail (post.ts). Orders and telemetry are solved
+   *  against it (ADR-0007 §1). */
+  post: PostDef;
+  /** Ticks of per-object position/velocity history retained (history.ts's ring buffer), sized by
+   *  the compiler from the level's largest possible body separation:
+   *  `ceil(2 * maxSeparation / c / dt) + 16`, where `maxSeparation` is twice the largest apoapsis
+   *  distance from the system primary (the worst case, two bodies each at apoapsis on opposite
+   *  sides) -- enough ticks to cover a full light round trip across the whole system, plus margin
+   *  (levels/compile.ts). Must be >= 2 (cubic Hermite needs two bracketing samples). */
+  historyTicks: number;
   probe: ProbeDef;
   /** Named random streams to create, e.g. ['debris_ejection']. Order fixes
    *  both creation and serialisation order. */
@@ -94,6 +115,12 @@ export interface Sim {
   /** One row per `scenario.streams` entry, same order. */
   streams: Uint32Array[];
   pending: PendingBurnNodes;
+  /** Every issued-but-not-yet-arrived command (ADR-0007 §2, arrivals.ts's own module header, GRV-
+   *  0029). `advance` applies whatever is due each tick before `activateDueBurnNodes`. */
+  pendingArrivals: PendingArrivals;
+  /** Per-object position/velocity ring buffer (history.ts, ADR-0007 §7): written at the end of
+   *  every tick for every live object. State: hashed and serialised. */
+  history: HistoryBuffer;
   /** Tick of each rail's last launch, NEVER_LAUNCHED (-1) until it has
    *  fired (docs/work/GRV-0014). One entry per `scenario.rails`, same
    *  order. Mutable Sim state: hashed and serialised. */
@@ -142,6 +169,26 @@ function validateScenario(scenario: Scenario): void {
     throw new Error(
       `validateScenario: probe has non-positive or non-finite exhaustVelocity (${probe.exhaustVelocity})`,
     );
+
+  if (
+    !Number.isInteger(scenario.post.host) ||
+    scenario.post.host < 0 ||
+    scenario.post.host >= scenario.bodies.length
+  )
+    throw new Error(`validateScenario: post has out-of-range host (${scenario.post.host})`);
+  if (!Number.isFinite(scenario.post.longitude) || Math.abs(scenario.post.longitude) > TWO_PI)
+    throw new Error(
+      `validateScenario: post has longitude (${scenario.post.longitude}) outside [-2pi, 2pi]`,
+    );
+
+  if (
+    !Number.isInteger(scenario.historyTicks) ||
+    scenario.historyTicks < 2 ||
+    scenario.historyTicks > MAX_HISTORY_TICKS
+  )
+    throw new Error(
+      `validateScenario: historyTicks must be an integer in [2, ${MAX_HISTORY_TICKS}] (${scenario.historyTicks})`,
+    );
 }
 
 function createPendingBurnNodes(capacity: number): PendingBurnNodes {
@@ -172,6 +219,11 @@ export function createSim({ scenario, seed }: { scenario: Scenario; seed: number
     scratch: createStepScratch({ bodies, contacts, dt: scenario.dt, capacity: scenario.capacity }),
     streams: scenario.streams.map((name) => createStream({ seed, name })),
     pending: createPendingBurnNodes(scenario.burnNodeCapacity),
+    pendingArrivals: createPendingArrivals(scenario.capacity + scenario.burnNodeCapacity),
+    history: createHistoryBuffer({
+      objectCapacity: scenario.capacity,
+      historyTicks: scenario.historyTicks,
+    }),
     railLastLaunchTick: new Int32Array(rails.count).fill(NEVER_LAUNCHED),
   };
 }
@@ -233,6 +285,19 @@ function activateDueBurnNodes(sim: Sim): void {
   }
 }
 
+/** Materialises every command whose light-cone arrival is due this tick, in queue order (arrival,
+ *  then issue -- `PendingArrivals`' own sort, arrivals.ts), before `activateDueBurnNodes`/
+ *  `stepTick`: a launch due this tick must exist before a same-tick burn bundled with it can be
+ *  armed against it, and before the ladder groups this tick's live objects (ADR-0007 §2, §6). */
+function applyDueArrivals(sim: Sim): void {
+  const pending = sim.pendingArrivals;
+  const i = 0;
+  while (i < pending.count && pending.arrivalTick[i]! <= sim.tick) {
+    materializeArrival({ sim, pending, index: i });
+    removePendingArrival(pending, i);
+  }
+}
+
 function validateLogSorted(log: readonly Command[]): void {
   for (let i = 1; i < log.length; i++) {
     if (log[i]!.tick < log[i - 1]!.tick)
@@ -262,15 +327,36 @@ export interface AdvanceArgs {
 
 /** Advances `sim` by `ticks` ticks. Warp is just a bigger `ticks` -- `dt`
  *  never changes (determinism rule 3). Each tick: apply due commands in log
- *  order, activate due burn nodes, step, then advance the clock. */
+ *  order (a command whose light-cone arrival is later than its issue tick queues itself,
+ *  commands.ts), materialise whatever command arrival is due this tick (`applyDueArrivals`),
+ *  activate due burn nodes, step, record every live object's history (history.ts), then advance
+ *  the clock. */
 export function advance({ sim, log, ticks }: AdvanceArgs): void {
   validateLogSorted(log);
   let cursor = findLogStart(log, sim.tick);
   for (let step = 0; step < ticks; step++) {
+    const countBeforeArrivals = sim.objects.count;
     while (cursor < log.length && log[cursor]!.tick === sim.tick) {
       applyCommand({ sim, command: log[cursor]! });
       cursor++;
     }
+    applyDueArrivals(sim);
+
+    // A launch materialised just now (immediately, or from a queued arrival) has no earlier
+    // iteration that could have recorded its history at this tick -- record its creation state
+    // here, before stepTick moves it, so history.ts's firstWriteTick really is the launch tick.
+    for (let i = countBeforeArrivals; i < sim.objects.count; i++) {
+      recordHistory({
+        history: sim.history,
+        object: i,
+        tick: sim.tick,
+        x: sim.objects.x[i]!,
+        y: sim.objects.y[i]!,
+        vx: sim.objects.vx[i]!,
+        vy: sim.objects.vy[i]!,
+      });
+    }
+
     activateDueBurnNodes(sim);
     stepTick({
       bodies: sim.bodies,
@@ -282,13 +368,27 @@ export function advance({ sim, log, ticks }: AdvanceArgs): void {
       scratch: sim.scratch,
     });
     sim.tick++;
+    // sim.objects now holds the state AT sim.tick (stepTick just integrated it from
+    // (sim.tick-1)*dt to sim.tick*dt) -- record it under that same tick, the live-state
+    // invariant lightcone.ts's own object-target solve relies on for issueTick === sim.tick.
+    for (let i = 0; i < sim.objects.count; i++) {
+      recordHistory({
+        history: sim.history,
+        object: i,
+        tick: sim.tick,
+        x: sim.objects.x[i]!,
+        y: sim.objects.y[i]!,
+        vx: sim.objects.vx[i]!,
+        vy: sim.objects.vy[i]!,
+      });
+    }
   }
 }
 
 /** Hex digest over tick, seed, count, every live object array prefix
- *  (including hitBody/burning as words), pending nodes, rail last-launch
- *  ticks, and stream words -- and, per contact (GRV-0015), cleared/
- *  impactTick/impactSpeed/impactEnergy. Derived scratch, bodies, rails and
+ *  (including hitBody/burning as words), pending nodes, pending light-cone arrivals, every live
+ *  object's history ring (GRV-0029), rail last-launch ticks, and stream words -- and, per contact
+ *  (GRV-0015), cleared/impactTick/impactSpeed/impactEnergy. Derived scratch, bodies, rails and
  *  contacts (the static tables) are excluded. */
 export function hashSim(sim: Sim): string {
   const state = createHash();
@@ -323,6 +423,31 @@ export function hashSim(sim: Sim): string {
     updateWord(state, sim.pending.lateral[i]!);
   }
 
+  const pa = sim.pendingArrivals;
+  updateWord(state, pa.count);
+  for (let i = 0; i < pa.count; i++) {
+    updateWord(state, pa.arrivalTick[i]!);
+    updateWord(state, pa.kind[i]!);
+    updateFloat64(state, pa.tick[i]!);
+    updateFloat64(state, pa.a[i]!);
+    updateFloat64(state, pa.b[i]!);
+    updateFloat64(state, pa.c[i]!);
+    updateFloat64(state, pa.d[i]!);
+  }
+
+  const hist = sim.history;
+  for (let i = 0; i < o.count; i++) {
+    updateWord(state, hist.firstWriteTick[i]!);
+    updateWord(state, hist.lastTick[i]!);
+    const base = i * hist.historyTicks;
+    for (let s = 0; s < hist.historyTicks; s++) {
+      updateFloat64(state, hist.x[base + s]!);
+      updateFloat64(state, hist.y[base + s]!);
+      updateFloat64(state, hist.vx[base + s]!);
+      updateFloat64(state, hist.vy[base + s]!);
+    }
+  }
+
   for (let i = 0; i < sim.rails.count; i++) {
     updateWord(state, sim.railLastLaunchTick[i]!);
   }
@@ -348,7 +473,9 @@ export function hashSim(sim: Sim): string {
 // GRV-0015 adds hitContact to the object record and a contact-state record
 // (cleared, impactTick, impactSpeed, impactEnergy per contact) to the
 // layout.
-const FORMAT_VERSION = 3;
+// 4 (GRV-0029): the light-cone pending-arrivals queue and every live object's position/velocity
+// history ring join the layout (ADR-0007 §7).
+const FORMAT_VERSION = 4;
 const HEADER_BYTES = 4 + 4; // formatVersion, simVersion
 const BODY_HEADER_BYTES = 4 + 4 + 4; // tick, seed, count
 // x y vx vy mass dryMass thrust exhaustVelocity burnNx burnNy burnTarget
@@ -357,6 +484,12 @@ const BODY_HEADER_BYTES = 4 + 4 + 4; // tick, seed, count
 // has no hot-path reason to bit-pack it).
 const OBJECT_RECORD_BYTES = 12 * 8 + 4 + 4 + 4;
 const PENDING_RECORD_BYTES = 4 * 4; // object, atTick, prograde, lateral
+// arrivalTick + kind (int32, for DataView-uniform access, mirroring `burning` above) + tick, a, b,
+// c, d (float64 -- arrivals.ts's own PendingArrivals doc: a launch's speed field exceeds Int32
+// range).
+const PENDING_ARRIVAL_RECORD_BYTES = 4 + 4 + 5 * 8;
+// firstWriteTick + lastTick (int32) per live object, then historyTicks * (x y vx vy, float64).
+const HISTORY_META_BYTES = 4 + 4;
 const RAIL_RECORD_BYTES = 4; // lastLaunchTick (int32)
 // cleared + impactTick (int32) + impactSpeed + impactEnergy (float64).
 const CONTACT_RECORD_BYTES = 4 + 4 + 8 + 8;
@@ -380,6 +513,9 @@ export function serializeSim(sim: Sim): Uint8Array {
     o.count * OBJECT_RECORD_BYTES +
     4 +
     sim.pending.count * PENDING_RECORD_BYTES +
+    4 +
+    sim.pendingArrivals.count * PENDING_ARRIVAL_RECORD_BYTES +
+    o.count * (HISTORY_META_BYTES + sim.history.historyTicks * HISTORY_RECORD_BYTES) +
     sim.rails.count * RAIL_RECORD_BYTES +
     sim.contacts.count * CONTACT_RECORD_BYTES +
     sim.streams.length * STREAM_RECORD_BYTES;
@@ -430,6 +566,31 @@ export function serializeSim(sim: Sim): Uint8Array {
     putI32(sim.pending.atTick[i]!);
     putI32(sim.pending.prograde[i]!);
     putI32(sim.pending.lateral[i]!);
+  }
+
+  const pa = sim.pendingArrivals;
+  putI32(pa.count);
+  for (let i = 0; i < pa.count; i++) {
+    putI32(pa.arrivalTick[i]!);
+    putI32(pa.kind[i]!);
+    putF64(pa.tick[i]!);
+    putF64(pa.a[i]!);
+    putF64(pa.b[i]!);
+    putF64(pa.c[i]!);
+    putF64(pa.d[i]!);
+  }
+
+  const hist = sim.history;
+  for (let i = 0; i < o.count; i++) {
+    putI32(hist.firstWriteTick[i]!);
+    putI32(hist.lastTick[i]!);
+    const base = i * hist.historyTicks;
+    for (let s = 0; s < hist.historyTicks; s++) {
+      putF64(hist.x[base + s]!);
+      putF64(hist.y[base + s]!);
+      putF64(hist.vx[base + s]!);
+      putF64(hist.vy[base + s]!);
+    }
   }
 
   for (let i = 0; i < sim.rails.count; i++) {
@@ -531,6 +692,39 @@ export function deserializeSim({
     pending.lateral[i] = getI32();
   }
 
+  const pendingArrivals = createPendingArrivals(scenario.capacity + scenario.burnNodeCapacity);
+  const pendingArrivalCount = getI32();
+  if (pendingArrivalCount < 0 || pendingArrivalCount > pendingArrivals.arrivalTick.length)
+    throw new Error(
+      `deserializeSim: pending arrival count ${pendingArrivalCount} exceeds capacity ${pendingArrivals.arrivalTick.length}`,
+    );
+  pendingArrivals.count = pendingArrivalCount;
+  for (let i = 0; i < pendingArrivalCount; i++) {
+    pendingArrivals.arrivalTick[i] = getI32();
+    pendingArrivals.kind[i] = getI32();
+    pendingArrivals.tick[i] = getF64();
+    pendingArrivals.a[i] = getF64();
+    pendingArrivals.b[i] = getF64();
+    pendingArrivals.c[i] = getF64();
+    pendingArrivals.d[i] = getF64();
+  }
+
+  const history = createHistoryBuffer({
+    objectCapacity: scenario.capacity,
+    historyTicks: scenario.historyTicks,
+  });
+  for (let i = 0; i < count; i++) {
+    history.firstWriteTick[i] = getI32();
+    history.lastTick[i] = getI32();
+    const base = i * history.historyTicks;
+    for (let s = 0; s < history.historyTicks; s++) {
+      history.x[base + s] = getF64();
+      history.y[base + s] = getF64();
+      history.vx[base + s] = getF64();
+      history.vy[base + s] = getF64();
+    }
+  }
+
   const railLastLaunchTick = new Int32Array(rails.count);
   for (let i = 0; i < rails.count; i++) railLastLaunchTick[i] = getI32();
 
@@ -564,10 +758,12 @@ export function deserializeSim({
     scratch: createStepScratch({ bodies, contacts, dt: scenario.dt, capacity: scenario.capacity }),
     streams,
     pending,
+    pendingArrivals,
+    history,
     railLastLaunchTick,
   };
 }
 
-export type { Command, LaunchRejection } from './commands.ts';
-export { checkLaunch } from './commands.ts';
+export type { BurnRejection, Command, LaunchRejection } from './commands.ts';
+export { checkBurn, checkLaunch } from './commands.ts';
 export type { EphemerisOut };

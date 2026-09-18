@@ -45,15 +45,17 @@
       }
     ],
     "contacts": [],
+    "post": { "host": 2, "longitude": 0 },
+    "historyTicks": 198,
     "probe": { "dryMass": 400, "propellantMass": 400, "exhaustVelocity": 3000, "thrust": 500 },
     "streams": ["debris_ejection"]
   },
   "seed": 12345,
   "log": [
     { "tick": 0, "kind": "launch", "rail": 0, "heading": 3447904301, "speed": 35000000 },
-    { "tick": 2500, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
+    { "tick": 2997, "kind": "burn", "probe": 0, "atTick": 3000, "prograde": 200000, "lateral": 50000 }
   ],
   "ticks": 6000,
-  "expectedHash": "bac70a53ec8cee4b",
-  "simVersion": 3
+  "expectedHash": "47448f64f618030a",
+  "simVersion": 4
 }

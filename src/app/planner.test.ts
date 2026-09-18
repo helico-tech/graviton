@@ -65,6 +65,8 @@ function level(overrides: Partial<CompiledLevel['scenario']> = {}): CompiledLeve
         },
       ],
       contacts: [],
+      post: { host: 0, longitude: 0 },
+      historyTicks: 4096,
       probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
       streams: [],
       ...overrides,

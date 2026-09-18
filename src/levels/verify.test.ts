@@ -177,6 +177,8 @@ describe('halveDt', () => {
         },
       ],
       contacts: [],
+      post: { host: 0, longitude: 0 },
+      historyTicks: 100,
       probe: { dryMass: 1, propellantMass: 1, exhaustVelocity: 1, thrust: 1 },
       streams: [],
     };
@@ -186,6 +188,9 @@ describe('halveDt', () => {
 
     expect(halved.dt).toBe(15);
     expect(halved.rails[0]!.reloadTicks).toBe(20);
+    // historyTicks covers a physical time window (ADR-0007 §7); halving dt must double the tick
+    // count to keep covering the same window.
+    expect(halved.historyTicks).toBe(200);
     expect(scenario).toEqual(original);
   });
 });
