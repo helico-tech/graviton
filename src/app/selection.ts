@@ -1,9 +1,13 @@
 // Selection state, picking and readouts (GRV-0023, GAME-0002 §8, §11). `pickAt` is pure geometry
 // over a `Frame`/`View` (the same world->screen camera the renderer uses, camera.ts's
 // `worldToScreen`) -- it never touches a live `Sim`. `describeSelection` is the opposite cut:
-// every value on the panel is read from `sim` and the ephemeris, never from the renderer or a
-// `Frame` (docs/domain/simulation-determinism.md rule 11) -- `src/app/debug-api.ts` is the only
-// caller, since a live `Sim` never leaves that module (mirrors `captureFrame`'s own boundary).
+// every value on the panel is read from `sim`, the ephemeris, the event log and the observed view
+// -- never a live object's/contact's true state (GRV-0032, ADR-0007 §6: a contact's/probe's own
+// STATE/CLOSING/ENERGY come from `src/app/confirmed.ts`, sourced from the telemetry event log;
+// a probe's MASS/PROPELLANT/DELTA-V/SPEED/RANGE come from its observed view, `src/app/observed.ts`
+// -- neither `sim.objects` nor `sim.contactState` is read here any more, `src/app/premise.test.ts`
+// asserts it) -- `src/app/debug-api.ts` is the only caller, since a live `Sim` never leaves that
+// module (mirrors `captureFrame`'s own boundary).
 import { contactPoint } from '../sim/contacts.ts';
 import { evaluateEphemeris, surfacePhase } from '../sim/ephemeris/bodies.ts';
 import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
@@ -24,6 +28,9 @@ import {
   formatKilometres,
   formatKilometresPerSecond,
 } from '../ui/format.ts';
+import { confirmedContactState, confirmedProbeState } from './confirmed.ts';
+import type { SimEvent } from './events.ts';
+import type { ObservedObject } from './observed.ts';
 import { formatSimTime } from './time.ts';
 
 export type SelectionKind = 'body' | 'rail' | 'contact' | 'probe';
@@ -204,20 +211,25 @@ function describeRail({
   ];
 }
 
+/** STATE/CLOSING/ENERGY read `confirmedContactState` (GRV-0032, `src/app/confirmed.ts`) --
+ *  HOST/CAPTURE/MIN ENERGY stay level-compiled constants read straight off `sim.contacts` (the
+ *  static `ContactTable`, never delayed -- ADR-0007 rule 12 only covers dynamic state), the one
+ *  read of `sim` this function still makes. */
 function describeContact({
   sim,
   level,
+  eventLog,
   index,
 }: {
   sim: Sim;
   level: FrameLevelNames;
+  eventLog: readonly SimEvent[];
   index: number;
 }): ReadoutRow[] {
   const contacts = sim.contacts;
-  const state = sim.contactState;
-  const cleared = state.cleared[index] !== 0;
-  const impactTick = state.impactTick[index]!;
-  const hasImpact = impactTick !== -1;
+  const confirmed = confirmedContactState({ eventLog, contact: index });
+  const hasImpact = confirmed !== 'uncleared';
+  const cleared = hasImpact && confirmed.cleared;
 
   return [
     { key: 'host', label: 'HOST', value: level.names.bodies[contacts.host[index]!] ?? DASH },
@@ -231,68 +243,83 @@ function describeContact({
       key: 'state',
       label: 'STATE',
       value: cleared
-        ? `CLEARED AT ${formatSimTime({ tick: impactTick, dt: sim.scenario.dt })}`
+        ? `CLEARED AT ${formatSimTime({ tick: confirmed.impactTick, dt: sim.scenario.dt })} (confirmed ${formatSimTime({ tick: confirmed.arrivalTick, dt: sim.scenario.dt })})`
         : 'UNCLEARED',
     },
     {
       key: 'closing',
       label: 'CLOSING',
-      value: hasImpact ? formatKilometresPerSecond(state.impactSpeed[index]!) : DASH,
+      value: hasImpact ? formatKilometresPerSecond(confirmed.closingSpeed) : DASH,
     },
     {
       key: 'energy',
       label: 'ENERGY',
-      value: hasImpact ? formatJoules(state.impactEnergy[index]!) : DASH,
+      value: hasImpact ? formatJoules(confirmed.impactEnergy) : DASH,
     },
   ];
 }
 
-/** `state`'s "expended at T+..." reads the *contact's* recorded impact tick when this probe
- *  expended on a fixed contact -- the object record itself carries no tick of its own. A body
- *  surface hit has no tick recorded anywhere in `Sim` (only `hitBody`'s index), so that case reads
- *  bare "EXPENDED": an honest gap in the current state shape, not a renderer estimate, and out of
- *  scope here (YAGNI -- no level in the campaign yet ends a flight against a body). */
+const UNOBSERVED_PROBE_ROWS: ReadoutRow[] = [
+  { key: 'mass', label: 'MASS', value: DASH },
+  { key: 'propellant', label: 'PROPELLANT', value: DASH },
+  { key: 'deltaV', label: 'DELTA-V', value: DASH },
+  { key: 'speed', label: 'SPEED', value: DASH },
+  { key: 'range', label: 'RANGE', value: DASH },
+  { key: 'state', label: 'STATE', value: DASH },
+  { key: 'observed', label: 'OBSERVED', value: DASH },
+];
+
+/** Every field here is the post's own picture, never the live probe (GRV-0032, ADR-0007 §5-6):
+ *  MASS/PROPELLANT/DELTA-V/SPEED come from `observed`'s own predicted present (`src/app/
+ *  observed.ts`), RANGE from the same predicted position against every contact `confirmedContact
+ *  State` doesn't yet show cleared, and STATE from `confirmedProbeState` (`src/app/confirmed.ts`)
+ *  layering BURNING on top from `observed.burning` -- already gated the same delayed way. `sim` is
+ *  read only for the static `bodies`/`contacts` tables (ephemeris, contact geometry) and `dt`,
+ *  never `sim.objects`/`sim.contactState`. `index` not existing in `observed` at all (never
+ *  launched) draws nothing, matching the old out-of-range-index contract. */
 function describeProbe({
   sim,
   eph,
   t,
+  eventLog,
+  observed,
   index,
 }: {
   sim: Sim;
   eph: EphemerisOut;
   t: number;
+  eventLog: readonly SimEvent[];
+  observed: ObservedObject | null;
   index: number;
 }): ReadoutRow[] {
-  const o = sim.objects;
-  if (index < 0 || index >= o.count) return [];
+  if (!observed) return [];
+  if (!observed.observation) return UNOBSERVED_PROBE_ROWS;
 
-  const mass = o.mass[index]!;
-  const dryMass = o.dryMass[index]!;
-  const deltaV = mass > dryMass ? o.exhaustVelocity[index]! * dlog(mass / dryMass) : 0;
+  const mass = observed.presentMass!;
+  const dryMass = observed.dryMass!;
+  const exhaustVelocity = observed.exhaustVelocity!;
+  const deltaV = mass > dryMass ? exhaustVelocity * dlog(mass / dryMass) : 0;
+  const predicted = observed.predicted!;
 
   let nearestRange = Infinity;
   for (let c = 0; c < sim.contacts.count; c++) {
-    if (sim.contactState.cleared[c]) continue;
+    const confirmed = confirmedContactState({ eventLog, contact: c });
+    if (confirmed !== 'uncleared' && confirmed.cleared) continue;
     const point = contactPoint({ bodies: sim.bodies, contacts: sim.contacts, contact: c, t, eph });
-    const distance = Math.hypot(o.x[index]! - point.x, o.y[index]! - point.y);
+    const distance = Math.hypot(predicted.x - point.x, predicted.y - point.y);
     if (distance < nearestRange) nearestRange = distance;
   }
 
-  const hitContact = o.hitContact[index]!;
-  const hitBody = o.hitBody[index]!;
+  const dt = sim.scenario.dt;
+  const confirmedProbe = confirmedProbeState({ eventLog, observed, probe: index });
   const state =
-    hitContact !== -1
-      ? `EXPENDED AT ${formatSimTime({ tick: sim.contactState.impactTick[hitContact]!, dt: sim.scenario.dt })}`
-      : hitBody !== -1
-        ? 'EXPENDED'
-        : o.burning[index]
+    confirmedProbe === 'unobserved'
+      ? DASH
+      : confirmedProbe === 'flying'
+        ? observed.burning
           ? 'BURNING'
-          : 'FLYING';
-
-  // GRV-0030, ADR-0007 §5: the age of the post's own last observation -- exactly the observation's
-  // own one-way delay, since staleness at "now" and delay-to-observe are the same quantity for a
-  // probe (delayToSelection below reads this same value for the status bar's DELAY).
-  const observed = observedState({ sim, object: index, atTick: sim.tick });
+          : 'FLYING'
+        : `EXPENDED AT ${formatSimTime({ tick: confirmedProbe.expendedTick, dt })} (confirmed ${formatSimTime({ tick: confirmedProbe.confirmedTick, dt })})`;
 
   return [
     { key: 'mass', label: 'MASS', value: formatKilograms(mass) },
@@ -301,7 +328,7 @@ function describeProbe({
     {
       key: 'speed',
       label: 'SPEED',
-      value: formatKilometresPerSecond(Math.hypot(o.vx[index]!, o.vy[index]!)),
+      value: formatKilometresPerSecond(Math.hypot(predicted.vx, predicted.vy)),
     },
     {
       key: 'range',
@@ -309,11 +336,7 @@ function describeProbe({
       value: Number.isFinite(nearestRange) ? formatKilometres(nearestRange) : DASH,
     },
     { key: 'state', label: 'STATE', value: state },
-    {
-      key: 'observed',
-      label: 'OBSERVED',
-      value: observed ? formatDuration(observed.delaySeconds) : DASH,
-    },
+    { key: 'observed', label: 'OBSERVED', value: formatDuration(observed.delaySeconds) },
   ];
 }
 
@@ -369,18 +392,24 @@ export function delayToSelection({
   }
 }
 
-/** Every field on the selection panel, computed straight from `sim` (objects, contactState,
- *  railLastLaunchTick, tick, dt), the body/rail/contact tables and the ephemeris -- never from a
- *  `Frame` or the renderer (rule 11). `[]` for a null selection or an out-of-range index (a probe
- *  not yet launched), which the panel reads as "nothing to show" rather than throwing. */
+/** Every field on the selection panel: body/rail read `sim`'s static/analytic tables and the
+ *  ephemeris (never delayed, rule 12); contact/probe STATE (and a contact's CLOSING/ENERGY, a
+ *  probe's MASS/PROPELLANT/DELTA-V/SPEED/RANGE) come from `eventLog`/`observed` instead (GRV-0032)
+ *  -- never from a `Frame`, the renderer, or a dynamic object's/contact's true state (rule 11).
+ *  `[]` for a null selection or an out-of-range index (a probe not yet launched), which the panel
+ *  reads as "nothing to show" rather than throwing. */
 export function describeSelection({
   sim,
   level,
   selection,
+  eventLog,
+  observed,
 }: {
   sim: Sim;
   level: FrameLevelNames;
   selection: Selection;
+  eventLog: readonly SimEvent[];
+  observed: readonly ObservedObject[];
 }): ReadoutRow[] {
   if (!selection) return [];
   const t = sim.tick * sim.scenario.dt;
@@ -398,10 +427,17 @@ export function describeSelection({
         : [];
     case 'contact':
       return selection.index >= 0 && selection.index < sim.contacts.count
-        ? describeContact({ sim, level, index: selection.index })
+        ? describeContact({ sim, level, eventLog, index: selection.index })
         : [];
     case 'probe':
-      return describeProbe({ sim, eph, t, index: selection.index });
+      return describeProbe({
+        sim,
+        eph,
+        t,
+        eventLog,
+        observed: observed[selection.index] ?? null,
+        index: selection.index,
+      });
   }
 }
 

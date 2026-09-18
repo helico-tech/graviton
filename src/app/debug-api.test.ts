@@ -7,6 +7,7 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { createDebugSession } from './debug-api.ts';
 import { createObservedCache } from './observed.ts';
+import type { ObservedObject } from './observed.ts';
 import type { CompiledLevel } from './levels.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
 import { repoRoot } from '../../scripts/lib/repo.ts';
@@ -310,13 +311,25 @@ describe('createDebugSession', () => {
     names: { bodies: ['Origin'], rails: ['Launch Rail'], contacts: [] },
   };
 
-  test('describeSelection reads the loaded sim through src/app/selection.ts', () => {
+  test('describeSelection reads the observed view (through stepSampled) and the event log via src/app/selection.ts', () => {
     const session = createDebugSession();
     session.load({ scenario: scenario(), seed: 1 });
     session.command(launchCommand());
-    session.step(1);
 
-    const rows = session.describeSelection(emptyLevel, { kind: 'probe', index: 0 });
+    // The post sits on the rail's own host here (scenario()'s post/rail share host 0), so one
+    // tick's own observed view already shows the just-launched probe as FLYING (GRV-0032:
+    // describeSelection now reads this, never `sim.objects` directly).
+    let observed: ObservedObject[] = [];
+    session.stepSampled({
+      ticks: 1,
+      level: wrapAsLevel({ scenario: scenario(), seed: 1 }),
+      cache: createObservedCache(),
+      onTick: (_positions, sample) => {
+        observed = sample.observed;
+      },
+    });
+
+    const rows = session.describeSelection(emptyLevel, { kind: 'probe', index: 0 }, [], observed);
 
     expect(rows.find((r) => r.key === 'state')?.value).toBe('FLYING');
   });
@@ -325,11 +338,11 @@ describe('createDebugSession', () => {
     const session = createDebugSession();
     session.load({ scenario: scenario(), seed: 1 });
 
-    expect(session.describeSelection(emptyLevel, null)).toEqual([]);
+    expect(session.describeSelection(emptyLevel, null, [], [])).toEqual([]);
   });
 
   test('describeSelection(level, null) never throws even before anything is loaded', () => {
     const session = createDebugSession();
-    expect(session.describeSelection(emptyLevel, null)).toEqual([]);
+    expect(session.describeSelection(emptyLevel, null, [], [])).toEqual([]);
   });
 });

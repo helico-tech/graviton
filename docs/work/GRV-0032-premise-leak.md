@@ -1,7 +1,7 @@
 ---
 id: GRV-0032
 epic: EPIC-07
-status: todo
+status: done
 ---
 # GRV-0032 Close the premise leak
 
@@ -31,3 +31,12 @@ everything comes from the observed view or the event log (ADR-0007 §6, GAME-000
   (pixel sample). Level 01 (co-located post) shows no visible change beyond one tick.
 
 **Verification.** `pnpm check`, `pnpm e2e`, screenshots at true impact + 4 and at arrival.
+
+**Delivered.** `confirmedContactState`/`confirmedProbeState` (`src/app/confirmed.ts`) are the one
+shared source `describeContact`/`describeProbe` (`src/app/selection.ts`), `captureFrame`'s contacts
+loop (`src/render/frame.ts`) and `timelineData` (`src/app/app.ts`) all read now, derived only from
+the telemetry event log (extended to carry a contact impact's closing speed/energy) and the
+observed view (extended to carry a probe's mass/dryMass/exhaustVelocity at the predicted present).
+A static guard (`src/app/premise.test.ts`) asserts `sim.contactState`/`sim.objects` are read nowhere
+in `src/app`/`src/ui`/`src/render` outside the observed-view boundary and a couple of narrowly
+justified, pre-existing exceptions. See `docs/evidence/GRV-0032/README.md` for the full account.

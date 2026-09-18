@@ -13,6 +13,8 @@ function observed({
   hitBody = -1,
   contactCleared = false,
   contactImpactTick = -1,
+  contactImpactSpeed = 0,
+  contactImpactEnergy = 0,
 }: {
   tick: number | null;
   burning?: boolean;
@@ -20,6 +22,8 @@ function observed({
   hitBody?: number;
   contactCleared?: boolean;
   contactImpactTick?: number;
+  contactImpactSpeed?: number;
+  contactImpactEnergy?: number;
 }): ObservedEventObject {
   return {
     observation: tick === null ? null : { tick },
@@ -28,6 +32,8 @@ function observed({
     hitBody,
     contactCleared,
     contactImpactTick,
+    contactImpactSpeed,
+    contactImpactEnergy,
   };
 }
 
@@ -82,14 +88,31 @@ describe('diffObservedEvents', () => {
     expect(events).toEqual([]);
   });
 
-  test('hitContact newly set is an impact, tagged at the sim’s own recorded impact tick (not the observation’s); a same-observation clear reports too', () => {
+  test('hitContact newly set is an impact carrying the recorded closing speed/energy, tagged at the sim’s own recorded impact tick (not the observation’s); a same-observation clear reports too', () => {
     const events = diffObservedEvents({
       before: [observed({ tick: 10, hitContact: -1 })],
-      after: [observed({ tick: 11, hitContact: 0, contactCleared: true, contactImpactTick: 7 })],
+      after: [
+        observed({
+          tick: 11,
+          hitContact: 0,
+          contactCleared: true,
+          contactImpactTick: 7,
+          contactImpactSpeed: 15_000,
+          contactImpactEnergy: 2e10,
+        }),
+      ],
       atTick: 30,
     });
     expect(events).toEqual([
-      { tick: 7, arrivalTick: 30, kind: 'impact', probe: 0, contact: 0 },
+      {
+        tick: 7,
+        arrivalTick: 30,
+        kind: 'impact',
+        probe: 0,
+        contact: 0,
+        closingSpeed: 15_000,
+        impactEnergy: 2e10,
+      },
       { tick: 7, arrivalTick: 30, kind: 'cleared', contact: 0 },
     ]);
   });
@@ -97,10 +120,29 @@ describe('diffObservedEvents', () => {
   test('hitContact newly set without clearing the threshold reports only the impact', () => {
     const events = diffObservedEvents({
       before: [observed({ tick: 10, hitContact: -1 })],
-      after: [observed({ tick: 11, hitContact: 0, contactCleared: false, contactImpactTick: 7 })],
+      after: [
+        observed({
+          tick: 11,
+          hitContact: 0,
+          contactCleared: false,
+          contactImpactTick: 7,
+          contactImpactSpeed: 900,
+          contactImpactEnergy: 5e9,
+        }),
+      ],
       atTick: 30,
     });
-    expect(events).toEqual([{ tick: 7, arrivalTick: 30, kind: 'impact', probe: 0, contact: 0 }]);
+    expect(events).toEqual([
+      {
+        tick: 7,
+        arrivalTick: 30,
+        kind: 'impact',
+        probe: 0,
+        contact: 0,
+        closingSpeed: 900,
+        impactEnergy: 5e9,
+      },
+    ]);
   });
 
   test('an impact revealed long after an occlusion blackout still reports the true impact tick', () => {
@@ -109,11 +151,28 @@ describe('diffObservedEvents', () => {
     const events = diffObservedEvents({
       before: [observed({ tick: 100, hitContact: -1 })],
       after: [
-        observed({ tick: 900, hitContact: 0, contactCleared: false, contactImpactTick: 130 }),
+        observed({
+          tick: 900,
+          hitContact: 0,
+          contactCleared: false,
+          contactImpactTick: 130,
+          contactImpactSpeed: 4_000,
+          contactImpactEnergy: 8e9,
+        }),
       ],
       atTick: 950,
     });
-    expect(events).toEqual([{ tick: 130, arrivalTick: 950, kind: 'impact', probe: 0, contact: 0 }]);
+    expect(events).toEqual([
+      {
+        tick: 130,
+        arrivalTick: 950,
+        kind: 'impact',
+        probe: 0,
+        contact: 0,
+        closingSpeed: 4_000,
+        impactEnergy: 8e9,
+      },
+    ]);
   });
 
   test('hitBody newly set is a bodyHit', () => {

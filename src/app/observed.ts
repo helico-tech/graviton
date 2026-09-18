@@ -65,6 +65,20 @@ export interface ObservedObject {
    *  without one -- src/app/events.ts trusts this rather than deriving a tick from two observation
    *  samples, which can be far more than one tick apart across an occlusion blackout. */
   readonly contactImpactTick: number;
+  /** `hitContact`'s own recorded closing speed/energy (contactState.impactSpeed/impactEnergy), 0
+   *  without one -- GRV-0032, carried onto the `impact` telemetry event (events.ts) rather than
+   *  read a second time from `contactState` by a describeContact/describeProbe caller. */
+  readonly contactImpactSpeed: number;
+  readonly contactImpactEnergy: number;
+  /** MASS/PROPELLANT/DELTA-V's own inputs, at the same "predicted present" tick as `predicted`
+   *  (GRV-0032): `presentMass` changes as propellant burns, so it is read *after* the tail replay,
+   *  never before; `dryMass`/`exhaustVelocity` are constant per probe but still sourced from this
+   *  same replay rather than the scenario archetype directly, keeping every probe-state field on
+   *  one boundary (ADR-0007 §5-6) rather than reading `sim.objects` a second way. `null` without an
+   *  observation. */
+  readonly presentMass: number | null;
+  readonly dryMass: number | null;
+  readonly exhaustVelocity: number | null;
 }
 
 interface ObjectCache {
@@ -112,6 +126,8 @@ function observedEventState(
   hitContact: number;
   contactCleared: boolean;
   contactImpactTick: number;
+  contactImpactSpeed: number;
+  contactImpactEnergy: number;
 } {
   const hitBody = sim.objects.hitBody[object]!;
   const hitContact = sim.objects.hitContact[object]!;
@@ -121,6 +137,8 @@ function observedEventState(
     hitContact,
     contactCleared: hitContact !== -1 && sim.contactState.cleared[hitContact]! !== 0,
     contactImpactTick: hitContact !== -1 ? sim.contactState.impactTick[hitContact]! : -1,
+    contactImpactSpeed: hitContact !== -1 ? sim.contactState.impactSpeed[hitContact]! : 0,
+    contactImpactEnergy: hitContact !== -1 ? sim.contactState.impactEnergy[hitContact]! : 0,
   };
 }
 
@@ -161,6 +179,11 @@ const EMPTY_VIEW: ObservedObject = {
   hitContact: -1,
   contactCleared: false,
   contactImpactTick: -1,
+  contactImpactSpeed: 0,
+  contactImpactEnergy: 0,
+  presentMass: null,
+  dryMass: null,
+  exhaustVelocity: null,
 };
 
 /** One object's observed view at `sim`'s current tick ("now"); `cache.perObject` is updated in
@@ -197,6 +220,8 @@ function observedObject({
 
   const eventState = observedEventState(atObservation, object);
   const expended = eventState.hitBody !== -1 || eventState.hitContact !== -1;
+  const dryMass = atObservation.objects.dryMass[object]!;
+  const exhaustVelocity = atObservation.objects.exhaustVelocity[object]!;
   const tail: ObservedSample[] = [];
   let tailTicks = 0;
   if (!expended) {
@@ -207,6 +232,9 @@ function observedObject({
       if (isExpended(atObservation, object)) break;
     }
   }
+  // Read after the tail replay, never before: mass keeps falling while a predicted burn runs
+  // (GRV-0032), so "the predicted present's own mass" is only correct once the replay reaches it.
+  const presentMass = atObservation.objects.mass[object]!;
 
   const predicted = tail.length > 0 ? tail[tail.length - 1]! : sampleObject(atObservation, object);
 
@@ -223,6 +251,9 @@ function observedObject({
       tail,
       delaySeconds: observed.delaySeconds,
       expended,
+      presentMass,
+      dryMass,
+      exhaustVelocity,
       ...eventState,
     },
     ticksIntegrated: resumeTicks + tailTicks,

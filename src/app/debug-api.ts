@@ -157,13 +157,25 @@ export interface DebugSession {
    *  `observed` is the caller's own already-computed observed view (GRV-0030, one entry per
    *  `sim.objects` index -- app.ts recomputes it once per `stepSampled` call and reuses the result
    *  here rather than replaying again). `t`, if given, is the horizon scrub's own override
-   *  (GRV-0026, captureFrame's own doc). */
-  captureFrame(level: FrameLevelNames, observed: readonly FrameObservation[], t?: number): Frame;
-  /** Every selection-panel field for `selection`, computed straight from the loaded `Sim`
-   *  (src/app/selection.ts's `describeSelection`, GRV-0023) -- mirrors `captureFrame`'s boundary:
-   *  the one place outside `src/render` (this module) a live `Sim` is read, `Sim` itself never
-   *  leaves it. */
-  describeSelection(level: FrameLevelNames, selection: Selection): ReadoutRow[];
+   *  (GRV-0026, captureFrame's own doc). `confirmedCleared`, one entry per contact (GRV-0032,
+   *  captureFrame's own doc) -- defaults to `[]` (every contact reads uncleared) for a caller that
+   *  doesn't care. */
+  captureFrame(
+    level: FrameLevelNames,
+    observed: readonly FrameObservation[],
+    confirmedCleared?: readonly boolean[],
+    t?: number,
+  ): Frame;
+  /** Every selection-panel field for `selection`, computed from the loaded `Sim`'s static tables
+   *  plus `eventLog`/`observed` (src/app/selection.ts's `describeSelection`, GRV-0023/GRV-0032) --
+   *  mirrors `captureFrame`'s boundary: the one place outside `src/render` (this module) a live
+   *  `Sim` is read, `Sim` itself never leaves it. */
+  describeSelection(
+    level: FrameLevelNames,
+    selection: Selection,
+    eventLog: readonly SimEvent[],
+    observed: readonly ObservedObject[],
+  ): ReadoutRow[];
   /** One-way delay to `selection`, in seconds (GAME-0002 §8's status bar `DELAY`, GRV-0030,
    *  src/app/selection.ts's `delayToSelection`) -- `null` for a body or no selection. */
   delay(selection: Selection): number | null;
@@ -361,8 +373,8 @@ export function createDebugSession(): DebugSession {
       return snapshot(loaded());
     },
 
-    captureFrame(level, observed, t) {
-      return captureFrameOf({ sim: loaded(), level, observed, t });
+    captureFrame(level, observed, confirmedCleared, t) {
+      return captureFrameOf({ sim: loaded(), level, observed, confirmedCleared, t });
     },
 
     delay(selection) {
@@ -385,13 +397,13 @@ export function createDebugSession(): DebugSession {
       return computeUplinkWindows({ sim: loaded(), path });
     },
 
-    describeSelection(level, selection) {
+    describeSelection(level, selection, eventLog, observed) {
       // A null selection never needs the loaded sim (describeSelectionOf's own contract, see
       // selection.ts) -- checked here too, rather than only inside the pure function, so this
       // stays answerable before anything is loaded (app.ts's selectionReadouts() calls it on
       // every render, including a failed loadLevel's, where `loaded()` below would throw).
       if (!selection) return [];
-      return describeSelectionOf({ sim: loaded(), level, selection });
+      return describeSelectionOf({ sim: loaded(), level, selection, eventLog, observed });
     },
 
     run({ scenario, seed, log: runLog, ticks }) {

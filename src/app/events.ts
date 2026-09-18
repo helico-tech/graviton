@@ -23,6 +23,11 @@ export interface SimEvent {
    *  event (launch, node start/end, impact, body hit, cleared); absent on `closestApproach`, which
    *  is a prediction, never something telemetry itself reports arriving. */
   readonly arrivalTick?: number;
+  /** The impact's own closing speed and energy (contacts.ts's own `ContactState`, read at
+   *  observation time -- GRV-0032, `src/app/confirmed.ts`'s `confirmedContactState`, the one place
+   *  a contact's CLOSING/ENERGY readout is now sourced from). Present only on `impact`. */
+  readonly closingSpeed?: number;
+  readonly impactEnergy?: number;
 }
 
 /** The live, per-tick state `sampleClosestApproach`'s own caller (app.ts) still needs -- closest
@@ -51,6 +56,11 @@ export interface ObservedEventObject {
   readonly contactCleared: boolean;
   /** The sim's own authoritative impact tick for `hitContact`, -1 without one. */
   readonly contactImpactTick: number;
+  /** The sim's own authoritative closing speed/energy for `hitContact` (contactState.impactSpeed/
+   *  impactEnergy), 0 without one -- GRV-0032, carried onto the `impact` `SimEvent` so
+   *  `confirmedContactState` never needs to read `contactState` itself. */
+  readonly contactImpactSpeed: number;
+  readonly contactImpactEnergy: number;
 }
 
 /** Edge-detected telemetry events between two observed-view samples, one app tick apart (app.ts
@@ -109,6 +119,8 @@ export function diffObservedEvents({
         kind: 'impact',
         probe: i,
         contact: a.hitContact,
+        closingSpeed: a.contactImpactSpeed,
+        impactEnergy: a.contactImpactEnergy,
       });
       if (a.contactCleared) {
         events.push({

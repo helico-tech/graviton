@@ -362,9 +362,18 @@ describe('createApp: timelineData', () => {
     expect(beforeImpact.rangeTicks).toBe(solution.ticks);
 
     app.warpTo(solution.ticks);
-    const afterImpact = app.timelineData()!;
-    expect(afterImpact.marks.some((m) => m.key === 'impact.0')).toBe(true);
+    let afterImpact = app.timelineData()!;
     expect(afterImpact.cursor.tick).toBe(solution.ticks);
+
+    // GRV-0032: the impact mark waits for telemetry to confirm it -- true impact is well within
+    // solution.ticks (3303), but the post's own confirmation lags behind (a post-impact occlusion
+    // blackout, the same one events.spec.ts documents), so no impact.0 mark yet at solution.ticks.
+    expect(afterImpact.marks.some((m) => m.key === 'impact.0')).toBe(false);
+
+    app.warpTo(3900); // comfortably past where telemetry confirms it (app.test.ts's own events
+    // test below cross-checks the exact arrival tick).
+    afterImpact = app.timelineData()!;
+    expect(afterImpact.marks.some((m) => m.key === 'impact.0')).toBe(true);
   });
 });
 
@@ -479,6 +488,8 @@ describe('createApp: events (GRV-0027)', () => {
       kind: 'impact',
       probe: 0,
       contact: 0,
+      closingSpeed: expect.any(Number),
+      impactEnergy: expect.any(Number),
     });
     expect(app.events()).toContainEqual({
       tick: 3298,
@@ -613,6 +624,8 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
       kind: 'impact',
       probe: 0,
       contact: 0,
+      closingSpeed: expect.any(Number),
+      impactEnergy: expect.any(Number),
     });
   });
 
