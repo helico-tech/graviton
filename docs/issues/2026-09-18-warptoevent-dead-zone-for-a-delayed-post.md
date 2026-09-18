@@ -3,7 +3,7 @@ status: triaged
 priority: P2
 filed: 2026-09-18
 filed-by: agent
-work: GRV-0030
+work: GRV-0031
 ---
 # warpToEvent() dead zone for a delayed post
 
