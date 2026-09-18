@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P2
 filed: 2026-09-18
 filed-by: agent
@@ -15,3 +15,5 @@ is stored as `-138625024`, and the reload gate `tick - last < reloadTicks` is th
 rail meant to never reload reloads instantly. Silent wrong compilation.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0020, commit 4f1c71e. createRailTable bounds reloadTicks to Int32 (0x7fffffff); the compiler catches it earlier, positioned at rails[i].reloadTime.

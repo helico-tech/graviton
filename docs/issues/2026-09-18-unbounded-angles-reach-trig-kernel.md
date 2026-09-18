@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P3
 filed: 2026-09-18
 filed-by: agent
@@ -17,3 +17,5 @@ source angles to [0, 2pi) changes no existing compiled level); reducing inside `
 would move every hash and re-solve every level for a P3.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0020, commit 4f1c71e. the compiler normalises axialPhaseAtEpoch/longitude/argPeriapsis/meanAnomalyAtEpoch to [0, 2pi); createBodyTable/createRailTable/createContactTable independently bound the same angles to [-2pi, 2pi] at load.
