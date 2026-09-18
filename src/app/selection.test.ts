@@ -215,6 +215,8 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
       },
     ],
     contacts: [{ host: 1, longitude: 0, captureRadius: 20_000, minimumImpactEnergy: 1e10 }],
+    post: { host: 1, longitude: 0 },
+    historyTicks: 4096,
     probe: { dryMass: 400, propellantMass: 600, exhaustVelocity: 3000, thrust: 500 },
     streams: [],
     ...overrides,

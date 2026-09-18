@@ -41,12 +41,14 @@
         "minimumImpactEnergy": 1e12
       }
     ],
+    "post": { "host": 1, "longitude": 3.141592653589793 },
+    "historyTicks": 17,
     "probe": { "dryMass": 400, "propellantMass": 400, "exhaustVelocity": 3000, "thrust": 500 },
     "streams": ["debris_ejection"]
   },
   "seed": 1,
   "log": [{ "tick": 0, "kind": "launch", "rail": 0, "heading": 2505542107, "speed": 34645246 }],
   "ticks": 200,
-  "expectedHash": "fca6f5504388a83c",
-  "simVersion": 3
+  "expectedHash": "6108d325bf738ae3",
+  "simVersion": 4
 }

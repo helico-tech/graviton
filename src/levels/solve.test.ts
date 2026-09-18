@@ -102,6 +102,8 @@ describe('coarsenScenario', () => {
       },
     ],
     contacts: [],
+    post: { host: 0, longitude: 0 },
+    historyTicks: 2,
     probe: { dryMass: 1, propellantMass: 1, exhaustVelocity: 1, thrust: 1 },
     streams: [],
   };
@@ -189,6 +191,10 @@ describe('evaluateLaunch: penalties ordered sensibly (rejected > body hit > miss
       },
     ],
     contacts: [{ host: 0, longitude: Math.PI / 2, captureRadius: 1e5, minimumImpactEnergy: 1e6 }],
+    // Post on the rail's own host and longitude: zero uplink delay, so evaluateLaunch's direct
+    // `command.tick = launchTick` (not routed through issueTickFor) stays exactly correct.
+    post: { host: 1, longitude: Math.PI },
+    historyTicks: 4096,
     probe: { dryMass: 100, propellantMass: 0, exhaustVelocity: 1000, thrust: 1 },
     streams: [],
   };
@@ -366,6 +372,8 @@ describe('solveLevel: an unreachable contact fails cleanly, respecting the budge
           },
         ],
         contacts: [{ host: 1, longitude: Math.PI, captureRadius: 1000, minimumImpactEnergy: 1 }],
+        post: { host: 1, longitude: 0 },
+        historyTicks: 4096,
         probe: { dryMass: 100, propellantMass: 0, exhaustVelocity: 1000, thrust: 1 },
         streams: [],
       },

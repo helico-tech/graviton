@@ -75,6 +75,11 @@
       }
     ],
     "dt": 30,
+    "historyTicks": 79,
+    "post": {
+      "host": 2,
+      "longitude": 3.141592653589793
+    },
     "probe": {
       "dryMass": 420,
       "exhaustVelocity": 31000,

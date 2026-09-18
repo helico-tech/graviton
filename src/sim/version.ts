@@ -10,4 +10,10 @@
 // flyby-burn: the probe's final x/y/vx/vy bits are unchanged -- see
 // docs/evidence/GRV-0015). Bumped so a stale golden fails loudly rather
 // than silently comparing against the wrong hash domain.
-export const SIM_VERSION = 3;
+// 4 (GRV-0029): the post and the light cone -- command application now depends on the post
+// (Scenario.post) and solves an uplink arrival tick before taking effect; the hash domain gains
+// the pending-arrivals queue and every live object's position/velocity history ring
+// (docs/evidence/GRV-0029). A level whose post sits on its rail's own host (both goldens, level
+// 01) sees no trajectory move -- see the evidence for the accuracy numbers and what did and did
+// not change.
+export const SIM_VERSION = 4;

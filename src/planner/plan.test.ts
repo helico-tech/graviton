@@ -7,6 +7,8 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { planToCommands, validatePlan } from './plan.ts';
 import type { FlightPlan } from './plan.ts';
+import { createSim } from '../sim/sim.ts';
+import type { Scenario } from '../sim/sim.ts';
 import type { CompiledLevel } from '../levels/compile.ts';
 import { repoRoot } from '../../scripts/lib/repo.ts';
 
@@ -14,6 +16,40 @@ function loadFixture(): CompiledLevel {
   return JSON.parse(
     fs.readFileSync(path.join(repoRoot, 'levels', 'T00-compiler-fixture.level.json'), 'utf8'),
   ) as CompiledLevel;
+}
+
+// Two rails, both on the post's own host and longitude -- zero uplink delay from either one, at
+// any tick, so `planToCommands`'s own issue-tick solve (`issueTickFor`) always lands exactly on
+// `plan.launchTick`, matching this file's mechanical (not physics) expectations below.
+function planToCommandsFixtureScenario(): Scenario {
+  const rail = {
+    host: 0,
+    longitude: 0,
+    muzzleSpeedMin: 1,
+    muzzleSpeedMax: 1e6,
+    headingCone: Math.PI,
+    reloadTicks: 0,
+  };
+  return {
+    dt: 60,
+    capacity: 4,
+    burnNodeCapacity: 4,
+    bodies: [
+      {
+        parent: -1,
+        mu: 3.986004418e14,
+        radius: 6.371e6,
+        rotationPeriod: 1e9,
+        axialPhaseAtEpoch: 0,
+      },
+    ],
+    rails: [rail, rail],
+    contacts: [],
+    post: { host: 0, longitude: 0 },
+    historyTicks: 4096,
+    probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
+    streams: [],
+  };
 }
 
 function basePlan(): FlightPlan {
@@ -83,9 +119,11 @@ describe('validatePlan', () => {
 });
 
 describe('planToCommands', () => {
+  const sim = createSim({ scenario: planToCommandsFixtureScenario(), seed: 1 });
+
   test('a plan with no nodes becomes a single launch command', () => {
     const plan = basePlan();
-    const commands = planToCommands({ plan, probeIndex: 0 });
+    const commands = planToCommands({ sim, plan, probeIndex: 0 });
     expect(commands).toEqual([
       { tick: 0, kind: 'launch', rail: 0, heading: 2570577009, speed: 65426813 },
     ]);
@@ -102,7 +140,7 @@ describe('planToCommands', () => {
         { atTick: 300, prograde: -50, lateral: 10 },
       ],
     };
-    const commands = planToCommands({ plan, probeIndex: 3 });
+    const commands = planToCommands({ sim, plan, probeIndex: 3 });
     expect(commands).toEqual([
       { tick: 100, kind: 'launch', rail: 1, heading: 42, speed: 999 },
       { tick: 100, kind: 'burn', probe: 3, atTick: 150, prograde: 2000, lateral: -100 },
@@ -121,7 +159,9 @@ describe('planToCommands', () => {
       speed: 1,
       nodes: [{ atTick: 6, prograde: 1, lateral: 0 }],
     };
-    const commands = [...planToCommands({ plan, probeIndex: 0 })].sort((a, b) => a.tick - b.tick);
+    const commands = [...planToCommands({ sim, plan, probeIndex: 0 })].sort(
+      (a, b) => a.tick - b.tick,
+    );
     expect(commands[0]!.kind).toBe('launch');
     expect(commands[1]!.kind).toBe('burn');
   });

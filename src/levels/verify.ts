@@ -64,12 +64,15 @@ export interface VerifyLevelResult {
 }
 
 /** dt/2, every rail's reloadTicks doubled (ADR-0006 §4's ticks stay whole numbers either way),
- *  everything else untouched. New objects throughout -- `scenario` and its arrays are never
- *  mutated. */
+ *  and historyTicks doubled too (GRV-0029, ADR-0007 §7): historyTicks covers a physical time
+ *  window, so halving dt must double the tick count to keep covering the same window -- otherwise
+ *  the dt/2 replay's own light-cone queries could fall outside the retained ring. Everything else
+ *  untouched. New objects throughout -- `scenario` and its arrays are never mutated. */
 export function halveDt(scenario: Scenario): Scenario {
   return {
     ...scenario,
     dt: scenario.dt / 2,
+    historyTicks: scenario.historyTicks * 2,
     rails: scenario.rails.map((rail) => ({ ...rail, reloadTicks: rail.reloadTicks * 2 })),
   };
 }

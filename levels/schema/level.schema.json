@@ -6,6 +6,16 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "atmosphereMargin": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
           "axialPhaseAtEpoch": {
             "anyOf": [
               {
@@ -230,6 +240,30 @@
       "minLength": 1,
       "type": "string"
     },
+    "post": {
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "longitude": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "host",
+        "longitude"
+      ],
+      "type": "object"
+    },
     "probes": {
       "items": {
         "additionalProperties": false,
@@ -425,7 +459,8 @@
     "bodies",
     "rails",
     "probes",
-    "contacts"
+    "contacts",
+    "post"
   ],
   "type": "object"
 }

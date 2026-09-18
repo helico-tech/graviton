@@ -1,7 +1,7 @@
 ---
 id: GRV-0029
 epic: EPIC-07
-status: todo
+status: done
 ---
 # GRV-0029 Light cone, the post and command arrival
 
@@ -38,3 +38,11 @@ history it needs, and applies every command when it arrives (ADR-0007 §1-5, §7
   the reason in the evidence; ghost invariant tests stay green.
 
 **Verification.** `pnpm check`, `pnpm e2e`, both goldens MATCH, `levels:verify` green.
+
+**Delivered.** The post, the history ring buffer, the light-cone solvers (uplink/downlink/
+occlusion/`issueTickFor`), and delayed command arrival are in; both goldens and level 01 replay
+correctly under `SIM_VERSION` 4 (level 01's impact tick and flight are bit-for-bit unchanged, since
+its post sits exactly on the rail's host). See `docs/evidence/GRV-0029/README.md` for the full
+verification output, the light-cone accuracy numbers, and two things that proved wrong versus the
+brief (own-body occlusion self-blocking, and `issueTickFor` needing to route around a transiently
+occluded issue tick) -- both fixed within this unit's scope, not deferred.

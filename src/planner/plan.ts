@@ -3,11 +3,17 @@
 // in 1/2^32 turn, speed and delta-v in mm/s, times in ticks -- ADR-0005 "Command log") so a plan
 // never carries a floating-point value the log itself wouldn't. `planToCommands` is the only way a
 // plan becomes commands: "a probe carries a flight plan loaded at launch and executed
-// autonomously" (GAME-0001 §4.4) means every node's burn command is issued at the launch tick
-// itself, not at its own activation tick -- the whole plan is uploaded to the probe at launch, and
-// it executes the schedule on its own from there. `commit` (src/app, later work) is nothing but
-// appending `planToCommands`'s result to the log.
-import type { Command } from '../sim/sim.ts';
+// autonomously" (GAME-0001 §4.4) means every node's burn command is issued at the SAME tick as the
+// launch itself, not at its own activation tick -- the whole plan is uploaded to the probe in one
+// transmission, and it executes the schedule on its own from there (ADR-0007 §2's "same issue
+// batch": the probe does not exist yet when a node's command is issued, so its arrival is solved
+// against the launch's own arrival, not the node's own target -- sim/commands.ts's
+// `resolveBurnProbe`). `commit` (src/app) is nothing but appending `planToCommands`'s result to
+// the log. `launchTick` is the plan's ARRIVAL tick -- when the probe actually leaves the rail
+// (ADR-0007 §2) -- not the tick the order is sent; `planToCommands` derives the issue tick itself
+// via `issueTickFor` so a caller never has to.
+import { issueTickFor } from '../sim/lightcone.ts';
+import type { Sim, Command } from '../sim/sim.ts';
 import type { CompiledLevel } from '../levels/compile.ts';
 
 export interface BurnNode {
@@ -22,6 +28,8 @@ export interface BurnNode {
 export interface FlightPlan {
   /** Rail index (Sim.rails order). */
   rail: number;
+  /** The tick the probe actually leaves the rail (ADR-0007 §2's arrival tick), not the tick the
+   *  launch order is sent -- `planToCommands` solves the issue tick itself. */
   launchTick: number;
   /** 0..4294967295 (1/2^32 of a turn -- commands.ts's HEADING_TURN). */
   heading: number;
@@ -85,23 +93,38 @@ export function validatePlan({
 }
 
 /** The only way a `FlightPlan` becomes `Command[]` (GAME-0001 §4.4: loaded at launch, executed
- *  autonomously) -- one launch command plus one burn command per node, every command's own `tick`
- *  (when it is *issued*) equal to `plan.launchTick`; a node's `atTick` (when it *activates*) is
- *  carried through unchanged. `probeIndex` is the object index the launch will get -- the caller's
- *  own `Sim.objects.count` at `plan.launchTick`, before the launch is applied (sim.ts's
- *  `applyLaunch` assigns exactly that index). Launch first, so a stable sort by tick (ties in log
+ *  autonomously; ADR-0007 §2) -- one launch command plus one burn command per node, every
+ *  command's own `tick` (when it is *issued*) equal to `issueTickFor(rail, plan.launchTick)`: the
+ *  latest tick the launch could be sent from and still arrive (materialise) exactly at
+ *  `plan.launchTick`. Every node command is issued at that SAME tick, bundled with the launch --
+ *  the probe does not exist yet at issue time, so its arrival can't be solved against the probe
+ *  itself; `resolveBurnProbe` (sim/commands.ts) instead finds the same-tick pending launch and
+ *  inherits its arrival ("same issue batch", ADR-0007 §2). A node's `atTick` (when it *activates*)
+ *  is carried through unchanged. `probeIndex` is the object index the launch will get -- the
+ *  caller's own `Sim.objects.count` at commit time, before the launch arrives (sim/commands.ts's
+ *  `materializeLaunch` assigns exactly that index, assuming no other launch arrives between commit
+ *  and this one's own arrival -- a known limitation for concurrent in-flight launches, not
+ *  exercised by any level this unit ships). Launch first, so a stable sort by tick (ties in log
  *  order, `Array.prototype.sort` is stable) never lets a burn's `probe` reference an object that
  *  does not exist yet when the log is replayed. */
 export function planToCommands({
+  sim,
   plan,
   probeIndex,
 }: {
+  sim: Sim;
   plan: FlightPlan;
   probeIndex: number;
 }): Command[] {
+  const issueTick = issueTickFor({
+    sim,
+    target: { kind: 'rail', rail: plan.rail },
+    atTick: plan.launchTick,
+  });
+
   const commands: Command[] = [
     {
-      tick: plan.launchTick,
+      tick: issueTick,
       kind: 'launch',
       rail: plan.rail,
       heading: plan.heading,
@@ -110,7 +133,7 @@ export function planToCommands({
   ];
   for (const node of plan.nodes) {
     commands.push({
-      tick: plan.launchTick,
+      tick: issueTick,
       kind: 'burn',
       probe: probeIndex,
       atTick: node.atTick,

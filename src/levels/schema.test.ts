@@ -28,6 +28,7 @@ const MINIMAL = {
   rails: [],
   probes: [],
   contacts: [],
+  post: { host: 'star', longitude: 0 },
 };
 
 describe('LevelSourceSchema', () => {

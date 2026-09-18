@@ -41,6 +41,8 @@ function scenario(overrides: Partial<Scenario> = {}): Scenario {
       },
     ],
     contacts: [{ host: 1, longitude: Math.PI / 2, captureRadius: 10, minimumImpactEnergy: 0 }],
+    post: { host: 1, longitude: 0 },
+    historyTicks: 4096,
     probe: { dryMass: 100, propellantMass: 100, exhaustVelocity: 3000, thrust: 100 },
     streams: [],
     ...overrides,
@@ -192,6 +194,7 @@ describe('largestOrbitApoapsis', () => {
       ],
       rails: [],
       contacts: [],
+      post: { host: 0, longitude: 0 },
     });
     const sim = createSim({ scenario: single, seed: 1 });
     expect(largestOrbitApoapsis(sim.bodies)).toBe(0);
