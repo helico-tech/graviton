@@ -38,16 +38,24 @@ are the deterministic tools the working agreements require; run them with
 plain `node` (Node 24 strips types). Work item IDs are `GRV-NNNN`; epics are
 `EPIC-NN`.
 
-`pnpm levels:build [--check]` compiles every `levels/*.level.yaml` to canonical JSON beside it
-and regenerates `levels/schema/level.schema.json` (ADR-0006, docs/work/GRV-0016-level-compiler.md);
-`--check` writes nothing and fails on stale output or a level with issues, and is part of `pnpm check`.
+## Levels
 
-`pnpm levels:verify [--check]` replays every level with a committed `<id>.solution.json` and
-writes `<id>.evidence.json` (ADR-0006 §5, docs/work/GRV-0017-level-verifier-and-evidence.md);
-`--check` is part of `pnpm check`. `pnpm levels:solve <id> [--write] [--window <ticks>]
-[--max-flight <ticks>] [--budget <evals>]` searches for a command log that clears a level's fixed
-contacts (docs/work/GRV-0018-level-solver.md); `--write` commits `<id>.solution.json` and
-regenerates its evidence through the same path `levels:verify` uses.
+`levels/<id>.level.yaml` is the hand-authored source for one level (ADR-0006): `Lnn-slug` is a
+campaign level, `Tnn-slug` a compiler/solver fixture (not part of the campaign). Everything else
+beside it is generated, never hand-edited: `<id>.level.json` (canonical JSON, `levels:build`),
+`<id>.solution.json` (a command log, `levels:solve`), `<id>.evidence.json` (that solution's
+replayed outcome, `levels:verify`), and `levels/schema/level.schema.json` (editor JSON Schema,
+`levels:build`, generated from the same source schema every level is validated against).
+
+`pnpm levels:build [--check]` compiles every `levels/*.level.yaml`; `--check` writes nothing and
+fails on stale output or a level with issues, and is part of `pnpm check`. `pnpm levels:solve <id>
+[--write] [--window <ticks>] [--max-flight <ticks>] [--budget <evals>]` searches for a command log
+that clears a level's fixed contacts (docs/work/GRV-0018-level-solver.md); `--write` commits
+`<id>.solution.json` and regenerates its evidence through the same path `levels:verify` uses.
+`pnpm levels:verify [--check]` replays every level with a committed solution and writes its
+evidence (ADR-0006 §5); `--check` is part of `pnpm check`. A campaign level with no solution fails
+`levels:verify`; a fixture is only reported -- `pnpm check` therefore proves every campaign level
+solvable.
 
 ## Proving a change
 
