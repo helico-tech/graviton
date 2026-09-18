@@ -329,6 +329,39 @@ body {
   white-space: nowrap;
 }
 
+/* The uplink availability band (GRV-0031, GAME-0001 §4.6): a dim strip along the axis for each
+   occlusion window -- `left`/`width` are the same inline percentages `.timeline-mark`'s own `left`
+   uses, set by src/ui/timeline.ts's `appendUplinkBand`, never a CSS transition (GAME-0002 §9).
+   Sits behind the line/marks (z-index below their default stacking) so a mark's own tick and label
+   stay legible over it. */
+.timeline-uplink-band {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 6px;
+  background: var(--unverified-dim);
+  z-index: 0;
+}
+
+/* The band's own text twin (GAME-0002 §11 "every reading on the plot is also available as text"):
+   visible but truncated with an ellipsis (a level with many short blocked windows produces a long
+   list) -- the full text is still there for readouts() (textContent is unaffected by CSS
+   truncation), only the on-screen line is kept to one row. Positioned like `.timeline-mark-label`
+   itself (`bottom: 0`), but spanning the whole axis rather than one tick's own left offset. */
+.timeline-uplink-readout {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--unverified);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* .plan-empty/.solution-empty are their own classes, not `.placeholder` reused, so
    tests/e2e/selection.spec.ts's own singular `.placeholder` match stays singular
    (src/ui/planner.ts's note) -- the three still share one visual style. */

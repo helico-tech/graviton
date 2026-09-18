@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P2
 filed: 2026-09-18
 filed-by: agent
@@ -33,3 +33,5 @@ already-solved batched-issuance tick when lazy issuance fails) is a planner-inte
 decision, not a mechanical one.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0031, commit 2b8c1e6. src/planner/ghost.ts now issues a draft's launch and every node bundled at issueTickFor(rail, launchTick), identically to planToCommands, instead of lazily per node -- a bundled burn never re-validates occlusion at all (commands.ts's own resolveBurnProbe bundled path), so a node deep inside a long blocked stretch integrates fine. ghost.test.ts's own flyby-burn invariant test now uses the golden's real atTick 3000 node directly, no more atTick 2000 workaround.

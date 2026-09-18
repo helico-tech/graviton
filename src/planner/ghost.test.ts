@@ -223,17 +223,15 @@ describe('ghost invariant: flyby-burn golden, its burn node plus a second, among
       heading: originalLaunch.heading,
       speed: originalLaunch.speed,
       nodes: [
-        // atTick 2000, not the golden's own 3000 (GRV-0030, docs/issues/2026-09-18-ghost-lazy-
-        // issuance-cannot-cross-a-long-blocked-stretch.md): the moon genuinely occludes the probe
-        // 2278-4403, and issueTickFor's own bounded backward search (a fixed step count by design,
-        // determinism rule 7) can't cross a stretch that long from a naive atTick-anchored
-        // estimate -- unlike the committed golden's own issue tick (2277), found by exhaustively
-        // searching for the latest clear tick, not through issueTickFor's bounded search. 2000
-        // sits inside the same clear window (1593-2277) the golden's own burn actually fires
-        // through, so this keeps testing a real, physically firing node -- just not the exact
-        // tick the lazy-issuance/batched-issuance equivalence this test proves cannot reach.
+        // atTick 3000, the golden's own real node timing (GRV-0031, docs/issues/2026-09-18-ghost-
+        // lazy-issuance-cannot-cross-a-long-blocked-stretch.md): batched issuance never validates a
+        // bundled burn's own occlusion at all (module header, "the launch's own checkLaunch already
+        // covers it for the whole transmission"), so a node deep inside the moon's 2278-4403 blocked
+        // stretch -- previously unreachable from issueTickFor's own bounded backward search under
+        // lazy issuance -- now integrates fine, exactly like the committed replay it mirrors. This
+        // is the filed limitation, resolved: no more atTick 2000 workaround.
         {
-          atTick: 2000,
+          atTick: 3000,
           prograde: originalBurn.prograde,
           lateral: originalBurn.lateral,
         },
@@ -311,6 +309,10 @@ describe('ghost invariant: flyby-burn golden, its burn node plus a second, among
 });
 
 describe('ghost cache', () => {
+  // Round atTicks are fine again (GRV-0031): batched issuance never checks a bundled burn's own
+  // occlusion (module header), so the moon's blocked stretch that once forced these off round
+  // numbers (GRV-0030, docs/issues/2026-09-18-ghost-lazy-issuance-cannot-cross-a-long-blocked-
+  // stretch.md) no longer matters here.
   function buildPlan(secondNodeProgradeMmPerS: number): FlightPlan {
     return {
       rail: 0,
@@ -318,14 +320,7 @@ describe('ghost cache', () => {
       heading: 3447904301,
       speed: 35000000,
       nodes: [
-        // atTick 100/2000, not the round 1000/2000 this test used before GRV-0030 (docs/issues/
-        // 2026-09-18-ghost-lazy-issuance-cannot-cross-a-long-blocked-stretch.md): the moon
-        // genuinely occludes the probe ticks 141-1592, and issueTickFor's own bounded backward
-        // search (a fixed step count by design) can't cross that whole stretch from a naive
-        // atTick=1000-anchored estimate -- not what this test is about, so its first node moved to
-        // 100 (inside the same early clear window [1,140] the search can actually reach). Node 1's
-        // own issue tick is read back from the cache below, never hardcoded.
-        { atTick: 100, prograde: 200000, lateral: 50000 },
+        { atTick: 1000, prograde: 200000, lateral: 50000 },
         { atTick: 2000, prograde: secondNodeProgradeMmPerS, lateral: 0 },
       ],
     };
@@ -361,13 +356,15 @@ describe('ghost cache', () => {
       cache: cache1,
     });
 
-    // Resumed from node 1's own checkpoint -- taken at its own issue tick (issueTickFor, ADR-0007
-    // §2: the latest tick that still gets it to the probe by atTick 2000, not atTick itself, so a
-    // resume can still substitute a fresh command for a node not yet issued -- module header),
-    // read back from cache1 itself rather than re-derived: far fewer ticks than a full
-    // re-integration either way, the cached-prefix proof the unit asks for.
-    const node1IssueTick = cache1.checkpoints[1]!.tick;
-    expect(ghost2.ticksIntegrated).toBe(horizonTick - node1IssueTick);
+    // Resumed from node 1's own checkpoint -- taken right before node 1 itself could activate
+    // (its own atTick, GRV-0031 module header: every command is already queued well before then,
+    // so there is nothing left to re-issue, only sim.pending's own stale entry to swap) -- read
+    // back from cache1 itself rather than hardcoded, though it is exactly plan1.nodes[1].atTick by
+    // construction: far fewer ticks than a full re-integration either way, the cached-prefix proof
+    // the unit asks for.
+    const node1CheckpointTick = cache1.checkpoints[1]!.tick;
+    expect(node1CheckpointTick).toBe(plan1.nodes[1]!.atTick);
+    expect(ghost2.ticksIntegrated).toBe(horizonTick - node1CheckpointTick);
     expect(ghost2.ticksIntegrated).toBeLessThan(ghost1.ticksIntegrated);
 
     const { ghost: coldGhost2 } = integrateGhost({
@@ -408,5 +405,112 @@ describe('ghost cache', () => {
       cache,
     });
     expect(ghost.ticksIntegrated).toBe(0);
+  });
+});
+
+describe('ghost invariant: amendment (GRV-0031)', () => {
+  test('a flying probe amended with a new node after the horizon is bit-identical to committing the identical burn command to a live sim', () => {
+    const golden = loadGolden();
+    const level = wrapAsLevel(golden);
+    const originalLaunch = golden.log[0]!;
+    if (originalLaunch.kind !== 'launch') throw new Error('expected a launch first');
+
+    // A second probe on the same rail, well clear of the golden's own tick-0 launch and its own
+    // 100-tick reload, flying with no nodes of its own -- amending it never touches the golden's
+    // own already-committed burn (node budget 1 per probe, burnNodeCapacity 4 / capacity 4). The
+    // rail's local vertical rotates with its host (mirrors the "flyby-burn golden, its burn node
+    // plus a second" test above), so the heading is read fresh at this launch's own tick rather
+    // than reusing tick 0's.
+    const secondLaunchTick = 200;
+    const headingAtSecondLaunch = (() => {
+      const sim = createSim({ scenario: level.scenario, seed: level.seed });
+      const eph = {
+        x: new Float64Array(sim.bodies.count),
+        y: new Float64Array(sim.bodies.count),
+        vx: new Float64Array(sim.bodies.count),
+        vy: new Float64Array(sim.bodies.count),
+      };
+      const t = secondLaunchTick * sim.scenario.dt;
+      evaluateEphemeris(sim.bodies, t, eph);
+      const geometry = railGeometry({
+        bodies: sim.bodies,
+        rails: sim.rails,
+        rail: originalLaunch.rail,
+        t,
+        eph,
+      });
+      return quantizeHeading(Math.atan2(geometry.uy, geometry.ux));
+    })();
+    const secondLaunch: Command = {
+      tick: secondLaunchTick,
+      kind: 'launch',
+      rail: originalLaunch.rail,
+      heading: headingAtSecondLaunch,
+      speed: originalLaunch.speed,
+    };
+    const log: Command[] = [golden.log[0]!, golden.log[1]!, secondLaunch].sort(
+      (a, b) => a.tick - b.tick,
+    );
+    const probeIndex = 1; // the golden's own probe is object 0, this one arrives second
+
+    // "post co-located -> observation = truth" (design note): this proves the amendment's own
+    // issuance/integration mechanics, not the observation-replay boundary itself (src/app/
+    // observed.test.ts's own job) -- fromTick doubles as the observation tick, so the two-stage
+    // replay integrateGhost's amend path performs collapses to a single one, exactly like a post
+    // that has never lost sight of the probe.
+    // fromTick 900: clear of both the post's own moon-in-the-way stretch this probe's own path
+    // crosses (confirmed directly: segmentBlocked is true for this probe from ~950-2300, false
+    // either side) -- chosen so the amendment's own issue-time occlusion check (checkBurn, sim/
+    // commands.ts -- the "simulation's own last line of defence") passes on a real, not hand-waved,
+    // geometry, matching the golden's own real post/moon setup rather than a synthetic fixture.
+    const fromTick = 900;
+    const horizonTick = 4000;
+    const newNode = { atTick: 3000, prograde: 50000, lateral: -20000 };
+
+    const plan: FlightPlan = {
+      rail: originalLaunch.rail,
+      launchTick: originalLaunch.tick,
+      heading: originalLaunch.heading,
+      speed: originalLaunch.speed,
+      nodes: [newNode], // the amendment's own full desired list -- nothing existing yet to carry
+    };
+
+    const { ghost } = integrateGhost({
+      level,
+      log,
+      plan,
+      fromTick,
+      horizonTick,
+      amend: { probe: probeIndex, observationTick: fromTick },
+    });
+    expect(ghost.probeIndex).toBe(probeIndex);
+    expect(ghost.events.some((e) => e.kind === 'launch')).toBe(false); // no relaunch, module header
+
+    // Committing the amendment for real: the exact same burn command, issued at fromTick, appended
+    // to the same log -- what commitPlan's own amendment path (src/app/debug-api.ts) does.
+    const committedLog: Command[] = [
+      ...log,
+      {
+        tick: fromTick,
+        kind: 'burn' as const,
+        probe: probeIndex,
+        atTick: newNode.atTick,
+        prograde: newNode.prograde,
+        lateral: newNode.lateral,
+      },
+    ].sort((a, b) => a.tick - b.tick);
+
+    const reference = liveReferenceSamples({
+      scenario: level.scenario,
+      seed: level.seed,
+      commands: committedLog,
+      probeIndex,
+      fromTick,
+      horizonTick,
+    });
+
+    expectSamplesIdentical(ghost.samples, reference);
+    expect(ghost.events.filter((e) => e.kind === 'nodeStart')).toHaveLength(1);
+    expect(ghost.events.filter((e) => e.kind === 'nodeEnd')).toHaveLength(1);
   });
 });

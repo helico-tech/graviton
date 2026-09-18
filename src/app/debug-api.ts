@@ -28,7 +28,11 @@ import { delayToSelection, describeSelection as describeSelectionOf } from './se
 import type { ReadoutRow, Selection } from './selection.ts';
 import type { EventContactState, EventObjectState, SimEvent } from './events.ts';
 import { planToCommands } from '../planner/plan.ts';
-import type { FlightPlan } from '../planner/plan.ts';
+import type { BurnNode, FlightPlan } from '../planner/plan.ts';
+import type { CommandHorizon } from './planner.ts';
+import { ARRIVAL_KIND_LAUNCH } from '../sim/arrivals.ts';
+import { computeUplinkWindows } from '../ui/timeline.ts';
+import type { UplinkWindow } from '../ui/timeline.ts';
 import type { SolutionReadout } from '../planner/readout.ts';
 
 declare const __BUILD_SHA__: string;
@@ -163,6 +167,27 @@ export interface DebugSession {
   /** One-way delay to `selection`, in seconds (GAME-0002 §8's status bar `DELAY`, GRV-0030,
    *  src/app/selection.ts's `delayToSelection`) -- `null` for a body or no selection. */
   delay(selection: Selection): number | null;
+  /** Every command already issued but not yet materialised (GRV-0031, ADR-0007 §2): the loaded
+   *  `Sim`'s own light-cone pending-arrivals queue (sim/arrivals.ts's `PendingArrivals`), restated
+   *  as plain data -- app.ts's `upcomingEvents()` needs this to target a command's own arrival
+   *  tick instead of skipping it once its issue tick has passed (the dead-zone bug this unit
+   *  resolves, docs/issues/2026-09-18-warptoevent-dead-zone-for-a-delayed-post.md): a co-located
+   *  post materialises within the same tick it issues (`Sim.pendingArrivals` never holds it even
+   *  for one tick), so this is only ever non-empty for a genuinely offset post. */
+  pendingCommandArrivals(): { arrivalTick: number; kind: 'launch' | 'burn' }[];
+  /** Issues an amendment's own diffed nodes (GRV-0031, `diffAmendmentNodes`, src/planner/plan.ts)
+   *  as burn commands to an already-flying probe, now -- never a relaunch. Unlike `commitPlan`
+   *  above this needs no `Sim` of its own (a burn command's validation happens later, when
+   *  `advance` actually reaches `issueTick`, exactly like any other committed command), but lives
+   *  here anyway to keep every way the session's log grows in one place. */
+  commitAmendment(args: { probe: number; nodes: readonly BurnNode[]; issueTick: number }): void;
+  /** The uplink availability band's own occlusion windows (GRV-0031, src/ui/timeline.ts's
+   *  `computeUplinkWindows`) along `path` -- the one place outside `src/render`/this module a live
+   *  `Sim` is needed for a UI-facing query, so it lives here rather than making `Sim` reach app.ts
+   *  directly (the same boundary `captureFrame`/`describeSelection` keep). `path` is the caller's
+   *  own already-predicted trajectory (the drafted/amended ghost's samples, or
+   *  src/app/predict.ts's `predictProbePath` for a selected, not-being-planned probe). */
+  uplinkWindows(args: { path: readonly { tick: number; x: number; y: number }[] }): UplinkWindow[];
   /** Runs a fresh, independent `Sim` to completion and reports its hash and
    *  final tick -- the loaded session (if any) is untouched. */
   run(args: RunArgs): RunResult;
@@ -273,6 +298,20 @@ export function createDebugSession(): DebugSession {
       for (const command of planToCommands({ sim: s, plan, probeIndex })) pushCommand(s, command);
     },
 
+    commitAmendment({ probe, nodes, issueTick }) {
+      const s = loaded();
+      for (const node of nodes) {
+        pushCommand(s, {
+          tick: issueTick,
+          kind: 'burn',
+          probe,
+          atTick: node.atTick,
+          prograde: node.prograde,
+          lateral: node.lateral,
+        });
+      }
+    },
+
     log: () => log,
 
     step(ticks) {
@@ -328,6 +367,22 @@ export function createDebugSession(): DebugSession {
 
     delay(selection) {
       return delayToSelection({ sim: loaded(), selection });
+    },
+
+    pendingCommandArrivals() {
+      const pending = loaded().pendingArrivals;
+      const out: { arrivalTick: number; kind: 'launch' | 'burn' }[] = [];
+      for (let i = 0; i < pending.count; i++) {
+        out.push({
+          arrivalTick: pending.arrivalTick[i]!,
+          kind: pending.kind[i] === ARRIVAL_KIND_LAUNCH ? 'launch' : 'burn',
+        });
+      }
+      return out;
+    },
+
+    uplinkWindows({ path }) {
+      return computeUplinkWindows({ sim: loaded(), path });
     },
 
     describeSelection(level, selection) {
@@ -401,6 +456,17 @@ export interface DebugApiDriver {
   observed(index: number): ObservedObject | null;
   /** One-way delay to `selection`, in seconds -- `null` for a body or no selection. */
   delay(selection: Selection): number | null;
+  // -- Amendments (GRV-0031, GAME-0001 §4.4, ADR-0007 §2-3).
+  /** Opens `probe`'s plan for amendment (`N` key, main.ts) -- `false` if `probe` has never
+   *  launched, or has no observation yet to plan against (`App.observed(probe)`'s own `null`
+   *  case: "the post plans on what it knows"). */
+  beginAmend(probe: number): boolean;
+  /** The current draft's command horizon (GAME-0001 §4.6) -- `null` without a draft, or (amend
+   *  mode) once the amended probe no longer exists. */
+  commandHorizon(): CommandHorizon | null;
+  /** The uplink availability band's own occlusion windows over the drafted/amended ghost's path,
+   *  or (no draft) the selected probe's predicted one (GRV-0031). `[]` without either. */
+  uplinkWindows(): readonly UplinkWindow[];
 }
 
 export interface DebugApi {
@@ -458,6 +524,10 @@ export interface DebugApi {
   // -- Telemetry (GRV-0030, ADR-0007 §5-6).
   observed(index: number): ObservedObject | null;
   delay(selection: Selection): number | null;
+  // -- Amendments (GRV-0031).
+  amend(probe: number): boolean;
+  horizon(): CommandHorizon | null;
+  uplinkWindows(): readonly UplinkWindow[];
 }
 
 declare global {
@@ -513,6 +583,9 @@ export function installDebugApi(driver: DebugApiDriver): void {
     solution: () => driver.planSolution(),
     observed: (index) => driver.observed(index),
     delay: (selection) => driver.delay(selection),
+    amend: (probe) => driver.beginAmend(probe),
+    horizon: () => driver.commandHorizon(),
+    uplinkWindows: () => driver.uplinkWindows(),
   };
   window.graviton = api;
 

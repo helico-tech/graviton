@@ -4,13 +4,22 @@
 // computed by src/app/src/planner (rule 11: every displayed number comes from the simulation),
 // never here. Untestable in this repo's Node-environment Vitest (no DOM, ADR-0002) -- covered by
 // tests/e2e/planner.spec.ts instead, matching src/ui/selection.ts's own convention.
+//
+// GRV-0031 (GAME-0001 §4.4/§4.6): 'amend' mode drops the RAIL/LAUNCH/HEADING/SPEED rows (there is
+// no launch to describe -- the probe already exists) in favour of the ISSUE/ARRIVES/CMD HORIZON
+// command-horizon readouts, shown in both modes; each node also gets its own STATUS row (LOCKED,
+// with the reason, or EDITABLE) once a command horizon exists to judge it against -- the same
+// `atTick < commandHorizonTick` test src/app/planner.ts's own `isNodeLocked` and src/render/
+// ghost.ts's node rendering already use (rule 11: one source of truth, never re-derived here).
 import { formatDegrees, formatKilometresPerSecond } from './format.ts';
 import { formatSimTime } from '../app/time.ts';
 import { HEADING_TURN } from '../sim/commands.ts';
-import type { FlightPlan } from '../planner/plan.ts';
+import type { CommandHorizon, PlannerMode } from '../app/planner.ts';
+import type { BurnNode, FlightPlan } from '../planner/plan.ts';
 
 const DASH = '—';
 const TWO_PI = Math.PI * 2;
+const LOCKED_REASON = 'order cannot arrive in time';
 
 export interface PlannerRefs {
   element: HTMLElement;
@@ -65,6 +74,20 @@ function row(label: string, key: string, value: string): HTMLElement {
   return field;
 }
 
+function isLocked({
+  node,
+  mode,
+  commandHorizon,
+}: {
+  node: BurnNode;
+  mode: PlannerMode;
+  commandHorizon: CommandHorizon | null;
+}): boolean {
+  return (
+    mode === 'amend' && commandHorizon !== null && node.atTick < commandHorizon.commandHorizonTick
+  );
+}
+
 /** Instant swap, no animation (GAME-0002 §9): rebuilds the row list from scratch, matching
  *  src/ui/selection.ts's own convention -- a draft's node count changes from render to render. */
 export function renderPlanner(
@@ -74,11 +97,16 @@ export function renderPlanner(
     railName,
     dt,
     issues,
+    mode,
+    commandHorizon,
   }: {
     plan: FlightPlan | null;
     railName: string;
     dt: number;
     issues: readonly string[];
+    mode: PlannerMode;
+    /** GRV-0031: `null` without a draft, or (amend mode) once the amended probe no longer exists. */
+    commandHorizon: CommandHorizon | null;
   },
 ): void {
   refs.body.replaceChildren();
@@ -98,14 +126,33 @@ export function renderPlanner(
     return;
   }
 
-  refs.body.append(
-    row('RAIL', 'rail', railName || DASH),
-    row('LAUNCH', 'launchTime', formatSimTime({ tick: plan.launchTick, dt })),
-    row('HEADING', 'heading', formatDegrees((plan.heading * TWO_PI) / HEADING_TURN)),
-    row('SPEED', 'speed', formatKilometresPerSecond(plan.speed / 1000)),
-  );
+  // A draft describes a launch that hasn't happened yet -- rail/heading/speed. An amendment has
+  // no launch to describe at all (the probe already exists, plan.ts's own FlightPlan doc: these
+  // fields are inert placeholders in amend mode) -- skipped entirely rather than shown as stale.
+  if (mode === 'draft') {
+    refs.body.append(
+      row('RAIL', 'rail', railName || DASH),
+      row('LAUNCH', 'launchTime', formatSimTime({ tick: plan.launchTick, dt })),
+      row('HEADING', 'heading', formatDegrees((plan.heading * TWO_PI) / HEADING_TURN)),
+      row('SPEED', 'speed', formatKilometresPerSecond(plan.speed / 1000)),
+    );
+  }
+  // Command horizon (GAME-0001 §4.6, GRV-0031): where an order sent right now first takes effect
+  // -- shown in both modes, from the simulation's own computed values (rule 11), never re-derived.
+  if (commandHorizon) {
+    refs.body.append(
+      row('ISSUE', 'issueTick', formatSimTime({ tick: commandHorizon.issueTick, dt })),
+      row('ARRIVES', 'arrivalTick', formatSimTime({ tick: commandHorizon.arrivalTick, dt })),
+      row(
+        'CMD HORIZON',
+        'commandHorizonTick',
+        formatSimTime({ tick: commandHorizon.commandHorizonTick, dt }),
+      ),
+    );
+  }
   plan.nodes.forEach((node, index) => {
     const n = index + 1;
+    const locked = isLocked({ node, mode, commandHorizon });
     refs.body.append(
       row(`NODE ${n} T`, `node.${index}.time`, formatSimTime({ tick: node.atTick, dt })),
       row(
@@ -115,6 +162,17 @@ export function renderPlanner(
       ),
       row(`NODE ${n} LAT`, `node.${index}.lateral`, formatKilometresPerSecond(node.lateral / 1000)),
     );
+    // Locked/editable status only means anything in amend mode (a draft's own nodes are never
+    // locked, module header) -- one row per node, "LOCKED, <reason>" or "EDITABLE".
+    if (mode === 'amend') {
+      refs.body.append(
+        row(
+          `NODE ${n} STATUS`,
+          `node.${index}.status`,
+          locked ? `LOCKED, ${LOCKED_REASON}` : 'EDITABLE',
+        ),
+      );
+    }
   });
 
   const disabled = issues.length > 0;

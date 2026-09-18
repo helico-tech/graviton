@@ -8,6 +8,7 @@ import type { App, AppChange } from './app.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
 import type { Command, Scenario } from '../sim/sim.ts';
 import type { FlightPlan } from '../planner/plan.ts';
+import { quantizeHeading, quantizeSpeed } from '../levels/solve.ts';
 
 const DT = 60;
 const MU = 3.986004418e14;
@@ -594,13 +595,15 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
     expect(app.warpRung()).toBe(1);
     expect(app.events()).toEqual([{ tick: 2464, arrivalTick: 2465, kind: 'launch', probe: 0 }]);
 
-    // nextEventTick()'s own prediction (predict.ts, unchanged by GRV-0030 -- "closest approach
-    // stays a prediction event") still targets the *true* impact tick (3298), so the warp lands
-    // right on it -- but the post's own telemetry of it hasn't arrived yet (the same meskel
-    // day/night occlusion the events test above documents), so the event itself isn't in the log
-    // until later; warping on confirms it landed once telemetry actually catches up.
+    // nextEventTick()'s own prediction (src/app/predict.ts) now targets the impact's own downlink-
+    // confirmed tick (GRV-0031's `downlinkArrivalOf`, "telemetry arrival ticks for ... impact
+    // confirmation"), not the bare true tick (3298) -- confirmed directly at 3299 for this probe
+    // (predict.test.ts's own L01_IMPACT_ARRIVAL_TICK) -- but the post's own *real* telemetry of it
+    // still hasn't arrived by then (the same meskel day/night occlusion the events test above
+    // documents: the true confirmation is later still, well past this predicted one), so the event
+    // itself isn't in the log yet; warping on confirms it landed once telemetry actually catches up.
     drainWarpToEvent(app);
-    expect(app.state().tick).toBe(3299); // one past the recorded impact tick (3298)
+    expect(app.state().tick).toBe(3300); // one past the predicted, downlink-confirmed tick (3299)
     expect(app.warpRung()).toBe(1);
 
     app.warpTo(3900);
@@ -611,6 +614,27 @@ describe('createApp: nextEventTick/warpToEvent (GRV-0027)', () => {
       probe: 0,
       contact: 0,
     });
+  });
+
+  // GRV-0031, docs/issues/2026-09-18-warptoevent-dead-zone-for-a-delayed-post.md: for a post
+  // genuinely offset from its rail (T01-far-post, unlike every fixture above), the committed
+  // launch's own issue tick (5724) precedes its materialisation (5744) by ~20 ticks -- before this
+  // fix, nextEventTick() dropped the command the instant its issue tick passed (still `<= nowTick`)
+  // with nothing to replace it until the probe actually existed, stalling `warpToEvent()` in
+  // between. It no longer does: the still-pending command (session.pendingCommandArrivals())
+  // targets its own arrival tick instead.
+  test('a post genuinely offset from its rail (T01) no longer stalls between a command’s issue tick and its materialisation', () => {
+    const app = createApp({ onChange: () => {} });
+    app.loadLevel('T01-far-post');
+    app.loadSolution();
+
+    drainWarpToEvent(app);
+    expect(app.state().tick).toBe(5725); // one past the committed launch's own issue tick (5724)
+    expect(app.nextEventTick()).toBe(5744); // the pending launch's own arrival, not null
+
+    drainWarpToEvent(app);
+    expect(app.state().tick).toBe(5745); // one past materialisation (5744) -- never stalled
+    expect(app.warpRung()).toBe(1);
   });
 
   test('an explicit warpTo cancels an in-flight warpToEvent target', () => {
@@ -730,5 +754,169 @@ describe('createApp: endDrag reintegrates too (GRV-0028)', () => {
     expect(app.plan()!.launchTick).toBe(6);
     expect(app.ghost()).not.toBeNull();
     expect(app.planIssues()).toEqual([]);
+  });
+});
+
+// GRV-0031 (GAME-0001 §4.4, ADR-0007 §2-3): a post genuinely offset from its rail, mirroring
+// src/app/planner.test.ts's own farLevel/FAR_* fixture (its own comment has the full derivation --
+// launched at tick 0, the probe materialises at tick 21, and an order sent at tick 100 arrives at
+// tick 120). Confirmed independently here too since app.ts's own beginAmend/commitPlan plumbing
+// is what's under test, not just the pure state transitions planner.test.ts already covers.
+function farScenario(): Scenario {
+  const C = 299792458;
+  return {
+    dt: 30,
+    capacity: 4,
+    burnNodeCapacity: 8,
+    bodies: [
+      { parent: -1, mu: MU, radius: RADIUS, rotationPeriod: 1e20, axialPhaseAtEpoch: 0 },
+      {
+        parent: 0,
+        mu: 1,
+        radius: 1e6,
+        rotationPeriod: 1e20,
+        axialPhaseAtEpoch: 0,
+        a: 10 * 60 * C,
+        e: 0,
+        argPeriapsis: 0,
+        meanAnomaly0: 0,
+      },
+    ],
+    rails: [
+      {
+        host: 1,
+        longitude: Math.PI,
+        muzzleSpeedMin: 1000,
+        muzzleSpeedMax: 100000,
+        headingCone: Math.PI / 6,
+        reloadTicks: 0,
+      },
+    ],
+    contacts: [],
+    post: { host: 0, longitude: 0 },
+    historyTicks: 4096,
+    probe: { dryMass: 500, propellantMass: 500, exhaustVelocity: 3000, thrust: 400 },
+    streams: [],
+  };
+}
+
+const FAR_LAUNCH: Command = {
+  tick: 0,
+  kind: 'launch',
+  rail: 0,
+  heading: quantizeHeading(Math.PI),
+  speed: quantizeSpeed(50000),
+};
+const FAR_COMMAND_HORIZON_TICK = 120;
+
+describe('createApp: amendment mode (GRV-0031)', () => {
+  test('mode/amendProbe start in draft; beginAmend is a no-op before there is any observation', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.command(FAR_LAUNCH);
+    app.step(1); // well before materialisation (tick 21) -- no observation of probe 0 yet
+
+    expect(app.mode()).toBe('draft');
+    expect(app.amendProbe()).toBeNull();
+    expect(app.beginAmend(0)).toBe(false);
+    expect(app.mode()).toBe('draft');
+  });
+
+  test('beginAmend opens amendment mode once the probe has an observation, and computes the command horizon', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.command(FAR_LAUNCH);
+    app.step(100);
+    expect(app.observed(0)!.observation).not.toBeNull(); // materialised (21) and observed by now
+
+    expect(app.beginAmend(0)).toBe(true);
+    expect(app.mode()).toBe('amend');
+    expect(app.amendProbe()).toBe(0);
+    expect(app.commandHorizon()).toEqual({
+      issueTick: 100,
+      arrivalTick: FAR_COMMAND_HORIZON_TICK,
+      commandHorizonTick: FAR_COMMAND_HORIZON_TICK,
+    });
+    expect(app.ghost()).not.toBeNull();
+    expect(app.ghost()!.probeIndex).toBe(0);
+  });
+
+  test('commitPlan on an amendment sends only the new node, and the live replay matches the ghost', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.command(FAR_LAUNCH);
+    app.step(100);
+    app.beginAmend(0);
+
+    const newTick = FAR_COMMAND_HORIZON_TICK + 20;
+    app.addNode({ tick: newTick });
+    expect(app.planIssues()).toEqual([]);
+    const predictedMass = app.ghost()!.samples.mass;
+
+    const result = app.commitPlan();
+    expect(result).toEqual({ committed: true });
+    expect(app.mode()).toBe('draft');
+    expect(app.plan()).toBeNull();
+
+    app.warpTo(newTick + 5);
+    const state = app.state();
+    // The same burn command the ghost previewed, replayed live -- its own delta-v (1 mm/s,
+    // addNode's own default) already shows up as a tiny mass loss by this point.
+    expect(state.objects[0]!.mass).toBeLessThan(predictedMass[0]!);
+  });
+
+  test('discardDraft (Escape) leaves amendment mode without sending anything', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.command(FAR_LAUNCH);
+    app.step(100);
+    app.beginAmend(0);
+    app.addNode({ tick: FAR_COMMAND_HORIZON_TICK + 20 });
+
+    app.discardDraft();
+    expect(app.mode()).toBe('draft');
+    expect(app.plan()).toBeNull();
+  });
+
+  test('uplinkWindows samples the drafted/amended ghost’s own path when there is one', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.command(FAR_LAUNCH);
+    app.step(100);
+    app.beginAmend(0);
+    // A clear scenario (no occluding third body) -- confirms the plumbing (ghost -> path ->
+    // session.uplinkWindows) runs end to end without throwing, and reports the honest answer.
+    expect(app.uplinkWindows()).toEqual([]);
+  });
+
+  test('uplinkWindows is empty with neither a draft nor a probe selection', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    expect(app.uplinkWindows()).toEqual([]);
+  });
+
+  test('nextEventTick surfaces a draft’s own (not yet committed) issue tick', () => {
+    const app = createApp({ onChange: () => {} });
+    app.load({ scenario: farScenario(), seed: 1 });
+    app.step(100);
+    app.setPlan({
+      rail: 0,
+      launchTick: 200,
+      heading: quantizeHeading(Math.PI),
+      speed: quantizeSpeed(50000),
+      nodes: [],
+    });
+
+    const horizon = app.commandHorizon()!;
+    expect(horizon.issueTick).toBeGreaterThan(100); // a real, not-yet-sent future issue tick
+    expect(horizon.issueTick).toBeLessThan(200); // strictly before the launch itself arrives
+    // Nothing committed yet -- this tick has no representation in the log at all.
+    expect(app.nextEventTick()).toBe(horizon.issueTick);
+
+    app.warpTo(horizon.issueTick);
+    // Once actually there, the issue tick itself is naturally in the past -- nextEventTick() now
+    // falls through to the ghost's own pre-existing 'launch' event (GRV-0026, at launchTick 200,
+    // unaffected by this unit), never the same tick twice.
+    expect(app.nextEventTick()).toBe(200);
   });
 });

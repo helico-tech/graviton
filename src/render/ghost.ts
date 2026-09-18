@@ -13,11 +13,18 @@
 import { formatMetres, worldToScreen } from './camera.ts';
 import type { View } from './camera.ts';
 import { drawMarker } from './bodies.ts';
-import { ALARM, CONFIRMED_GOOD, KNOWN, LINE_STYLES, MONO_FONT_FAMILY } from './palette.ts';
+import {
+  ALARM,
+  CONFIRMED_GOOD,
+  KNOWN,
+  KNOWN_DIM,
+  LINE_STYLES,
+  MONO_FONT_FAMILY,
+} from './palette.ts';
 import type { Ctx2D } from './ctx2d.ts';
 import { HEADING_TURN } from '../sim/commands.ts';
 import type { Ghost } from '../planner/ghost.ts';
-import type { FlightPlan } from '../planner/plan.ts';
+import type { BurnNode, FlightPlan } from '../planner/plan.ts';
 
 const TWO_PI = Math.PI * 2;
 const NODE_MARKER_RADIUS_PX = 4;
@@ -47,6 +54,17 @@ export interface GhostRenderNode {
   /** This node's own index into `FlightPlan.nodes` -- hit-testing's own way back to
    *  `app.selectNode`/`beginNodeDrag`. */
   readonly index: number;
+  /** GRV-0031, GAME-0001 §4.4/GAME-0002 §7: `atTick` earlier than the command horizon in 'amend'
+   *  mode -- drawn hollow rather than filled, and never grows a handle even if selected
+   *  (`buildPlannerFrame`'s own `handle` below). Always `false` in 'draft' mode (a draft's own
+   *  plan is one not-yet-sent transmission, nothing in it is locked). */
+  readonly locked: boolean;
+}
+
+export interface CommandHorizonMark {
+  readonly x: number;
+  readonly y: number;
+  readonly label: string;
 }
 
 export interface GhostRenderHandle {
@@ -83,6 +101,13 @@ export interface PlannerFrame {
   readonly handle: GhostRenderHandle | null;
   readonly events: readonly GhostEventMark[];
   readonly launchVector: LaunchVectorPreview | null;
+  /** GRV-0031: the tick before which the path is locked (dimmed solid, GAME-0002 §4) -- `null` in
+   *  'draft' mode, where nothing is ever locked, so the whole path draws in the ordinary dashed
+   *  "predicted" style. */
+  readonly lockedUntilTick: number | null;
+  /** The command horizon's own mark on the path, `CMD +mm:ss` (GAME-0001 §4.6) -- `null` without a
+   *  ghost or a command horizon, or if the ghost never actually reached that tick. */
+  readonly commandHorizonMark: CommandHorizonMark | null;
 }
 
 function sampleAt(
@@ -107,11 +132,21 @@ function ghostPath(ghost: Ghost): GhostPathPoint[] {
   return points;
 }
 
-function ghostNodes(ghost: Ghost, plan: FlightPlan): GhostRenderNode[] {
+function isNodeLocked(node: BurnNode, lockedUntilTick: number | null): boolean {
+  return lockedUntilTick !== null && node.atTick < lockedUntilTick;
+}
+
+function ghostNodes(
+  ghost: Ghost,
+  plan: FlightPlan,
+  lockedUntilTick: number | null,
+): GhostRenderNode[] {
   const nodes: GhostRenderNode[] = [];
   plan.nodes.forEach((node, index) => {
     const sample = sampleAt(ghost, node.atTick);
-    if (sample) nodes.push({ x: sample.x, y: sample.y, index });
+    if (sample) {
+      nodes.push({ x: sample.x, y: sample.y, index, locked: isNodeLocked(node, lockedUntilTick) });
+    }
   });
   return nodes;
 }
@@ -119,21 +154,24 @@ function ghostNodes(ghost: Ghost, plan: FlightPlan): GhostRenderNode[] {
 /** The selected node's prograde (along the ghost's own velocity at its tick) and lateral (+90
  *  degrees, left of velocity -- plan.ts's own BurnNode doc) handle tips, a fixed screen length out
  *  from the node -- a drag affordance, not a magnitude readout (the PLAN panel shows the exact
- *  mm/s). `null` if there is no selection or the ghost never reached that tick. */
+ *  mm/s). `null` if there is no selection, the ghost never reached that tick, or (GRV-0031) the
+ *  node is locked -- "no handles" (GAME-0001 §4.4), a locked node can't be dragged at all. */
 function ghostHandle({
   ghost,
   plan,
   selectedNode,
   view,
+  lockedUntilTick,
 }: {
   ghost: Ghost;
   plan: FlightPlan;
   selectedNode: number | null;
   view: View;
+  lockedUntilTick: number | null;
 }): GhostRenderHandle | null {
   if (selectedNode === null) return null;
   const node = plan.nodes[selectedNode];
-  if (!node) return null;
+  if (!node || isNodeLocked(node, lockedUntilTick)) return null;
   const sample = sampleAt(ghost, node.atTick);
   if (!sample) return null;
 
@@ -205,33 +243,81 @@ function launchVectorPreview({
   };
 }
 
+/** `+mm:ss` (GAME-0001 §4.6's own `CMD +mm:ss` label): minutes uncapped (a draft's own command
+ *  horizon can be a long flight away), never the `T+dd:hh:mm:ss` absolute-time format
+ *  (src/app/time.ts's `formatSimTime`) -- this is a duration, "how far from now", not a moment. */
+function formatMinutesSeconds(totalSeconds: number): string {
+  const total = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${pad(minutes)}:${pad(seconds)}`;
+}
+
+/** The command horizon's own mark (GAME-0001 §4.6): a point on the ghost's predicted path at
+ *  `commandHorizonTick`, labelled with how far that is from the ghost's own start (`fromTick`,
+ *  "now") -- for a draft that is the launch's own flight time to arrival (the mark sits right at
+ *  the path's own start, since the ghost never draws before its probe exists); for an amendment,
+ *  the pure uplink delay. `null` if the ghost never actually reached that tick. */
+function commandHorizonMarkFor({
+  ghost,
+  commandHorizonTick,
+  dt,
+}: {
+  ghost: Ghost;
+  commandHorizonTick: number;
+  dt: number;
+}): CommandHorizonMark | null {
+  const sample = sampleAt(ghost, commandHorizonTick);
+  if (!sample) return null;
+  const label = `CMD +${formatMinutesSeconds((commandHorizonTick - ghost.fromTick) * dt)}`;
+  return { x: sample.x, y: sample.y, label };
+}
+
 /** Ghost + FlightPlan -> plain world-space geometry (never screen space -- `drawPlannerFrame`
  *  below projects it, mirroring how `renderPlot` projects trails itself). `launchOrigin` is the
  *  rail's current world position (Frame.rails[plan.rail], already computed by captureFrame) and
  *  is read only while a launch drag is actually live -- released, the ghost path itself is the
- *  primary read, not a straight preview arrow. */
+ *  primary read, not a straight preview arrow. `commandHorizon`/`dt` are GRV-0031's own addition
+ *  (GAME-0001 §4.6): `locks: true` only in 'amend' mode (a draft's own plan is one not-yet-sent
+ *  transmission -- nothing in it is locked, plan.ts's "same issue batch"). */
 export function buildPlannerFrame({
   plan,
   ghost,
   selectedNode,
   launchOrigin,
   view,
+  commandHorizon,
+  dt,
 }: {
   plan: FlightPlan | null;
   ghost: Ghost | null;
   selectedNode: number | null;
   launchOrigin: { x: number; y: number } | null;
   view: View;
+  commandHorizon: { commandHorizonTick: number; locks: boolean } | null;
+  dt: number;
 }): PlannerFrame | null {
   if (!plan) return null;
+  const lockedUntilTick =
+    commandHorizon && commandHorizon.locks ? commandHorizon.commandHorizonTick : null;
   return {
     path: ghost ? ghostPath(ghost) : [],
-    nodes: ghost ? ghostNodes(ghost, plan) : [],
-    handle: ghost ? ghostHandle({ ghost, plan, selectedNode, view }) : null,
+    nodes: ghost ? ghostNodes(ghost, plan, lockedUntilTick) : [],
+    handle: ghost ? ghostHandle({ ghost, plan, selectedNode, view, lockedUntilTick }) : null,
     events: ghost ? ghostEvents(ghost) : [],
     launchVector: launchOrigin
       ? launchVectorPreview({ plan, originX: launchOrigin.x, originY: launchOrigin.y })
       : null,
+    lockedUntilTick,
+    commandHorizonMark:
+      ghost && commandHorizon
+        ? commandHorizonMarkFor({
+            ghost,
+            commandHorizonTick: commandHorizon.commandHorizonTick,
+            dt,
+          })
+        : null,
   };
 }
 
@@ -290,32 +376,83 @@ export function plannerLabels({
     .filter((_, index) => !suppressed[index]);
 }
 
-function drawPath(
+function strokePathSegment(
   ctx: Ctx2D,
   {
-    path,
+    points,
+    color,
     view,
     canvasWidth,
     canvasHeight,
-  }: { path: readonly GhostPathPoint[]; view: View; canvasWidth: number; canvasHeight: number },
+  }: {
+    points: readonly GhostPathPoint[];
+    color: string;
+    view: View;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
 ): void {
-  if (path.length < 2) return;
+  if (points.length < 2) return;
   ctx.beginPath();
-  const first = project(view, canvasWidth, canvasHeight, path[0]!.x, path[0]!.y);
+  const first = project(view, canvasWidth, canvasHeight, points[0]!.x, points[0]!.y);
   ctx.moveTo(first.x, first.y);
-  for (let i = 1; i < path.length; i++) {
-    const p = project(view, canvasWidth, canvasHeight, path[i]!.x, path[i]!.y);
+  for (let i = 1; i < points.length; i++) {
+    const p = project(view, canvasWidth, canvasHeight, points[i]!.x, points[i]!.y);
     ctx.lineTo(p.x, p.y);
   }
-  ctx.strokeStyle = LINE_STYLES.ghost.color;
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.setLineDash([...LINE_STYLES.ghost.dash]);
   ctx.stroke();
   ctx.setLineDash([]);
 }
 
-/** Burn nodes as small filled squares (GAME-0002 §7): every node is amendable until signal delay
- *  exists (a later epic, YAGNI here), so every node draws filled, never hollow. */
+/** The dashed "predicted" ghost path (GAME-0002 §4), split at `lockedUntilTick` (GRV-0031) into a
+ *  dimmed (`KNOWN_DIM`) locked stretch and the ordinary `KNOWN` one beyond it -- the identical
+ *  dash throughout (palette.ts's own convention for "dimmed solid": colour only, mirroring an
+ *  expended trail, src/render/plot.ts). `null` draws the whole path `KNOWN`, a draft's own case
+ *  (nothing in it is ever locked). The two segments share their boundary point so the line reads
+ *  continuous. */
+function drawPath(
+  ctx: Ctx2D,
+  {
+    path,
+    lockedUntilTick,
+    view,
+    canvasWidth,
+    canvasHeight,
+  }: {
+    path: readonly GhostPathPoint[];
+    lockedUntilTick: number | null;
+    view: View;
+    canvasWidth: number;
+    canvasHeight: number;
+  },
+): void {
+  if (lockedUntilTick === null) {
+    strokePathSegment(ctx, { points: path, color: KNOWN, view, canvasWidth, canvasHeight });
+    return;
+  }
+  let splitIndex = path.findIndex((p) => p.tick >= lockedUntilTick);
+  if (splitIndex === -1) splitIndex = path.length - 1;
+  strokePathSegment(ctx, {
+    points: path.slice(0, splitIndex + 1),
+    color: KNOWN_DIM,
+    view,
+    canvasWidth,
+    canvasHeight,
+  });
+  strokePathSegment(ctx, {
+    points: path.slice(splitIndex),
+    color: KNOWN,
+    view,
+    canvasWidth,
+    canvasHeight,
+  });
+}
+
+/** Burn nodes as small squares (GAME-0002 §7): filled while amendable, hollow once locked
+ *  (GRV-0031, GAME-0001 §4.4) -- a stroked square rather than `drawMarker`'s own fill-only glyph. */
 function drawNodes(
   ctx: Ctx2D,
   {
@@ -332,13 +469,29 @@ function drawNodes(
 ): void {
   for (const node of nodes) {
     const p = project(view, canvasWidth, canvasHeight, node.x, node.y);
-    drawMarker(ctx, {
-      x: p.x,
-      y: p.y,
-      shape: 'square',
-      radius: NODE_MARKER_RADIUS_PX,
-      color: KNOWN,
-    });
+    if (node.locked) {
+      // A stroked (hollow) square -- Ctx2D (ctx2d.ts) is a deliberately minimal Canvas2D subset
+      // with no strokeRect, so this is the same moveTo/lineTo/closePath/stroke shape every other
+      // hairline here already uses.
+      ctx.strokeStyle = KNOWN_DIM;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(p.x - NODE_MARKER_RADIUS_PX, p.y - NODE_MARKER_RADIUS_PX);
+      ctx.lineTo(p.x + NODE_MARKER_RADIUS_PX, p.y - NODE_MARKER_RADIUS_PX);
+      ctx.lineTo(p.x + NODE_MARKER_RADIUS_PX, p.y + NODE_MARKER_RADIUS_PX);
+      ctx.lineTo(p.x - NODE_MARKER_RADIUS_PX, p.y + NODE_MARKER_RADIUS_PX);
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      drawMarker(ctx, {
+        x: p.x,
+        y: p.y,
+        shape: 'square',
+        radius: NODE_MARKER_RADIUS_PX,
+        color: KNOWN,
+      });
+    }
   }
 }
 
@@ -487,6 +640,19 @@ function drawLaunchVector(
   drawLabel(ctx, { x: tip.x, y: tip.y, text: vector.label });
 }
 
+/** The command horizon's own mark (GAME-0001 §4.6): a small triangle (distinct from every node
+ *  square, handle circle and event glyph already on this plot) plus its `CMD +mm:ss` label. */
+function drawCommandHorizonMark(ctx: Ctx2D, { mark }: { mark: CommandHorizonMark }): void {
+  drawMarker(ctx, {
+    x: mark.x,
+    y: mark.y,
+    shape: 'triangle',
+    radius: EVENT_MARKER_RADIUS_PX,
+    color: KNOWN,
+  });
+  drawLabel(ctx, { x: mark.x, y: mark.y, text: mark.label });
+}
+
 /** Draws the whole planner overlay -- called from renderPlot (src/render/plot.ts) after the live
  *  plot's own content, so the ghost and its handles sit on top of bodies, rails and probes. */
 export function drawPlannerFrame(
@@ -499,9 +665,25 @@ export function drawPlannerFrame(
   }: { frame: PlannerFrame | null; view: View; canvasWidth: number; canvasHeight: number },
 ): void {
   if (!frame) return;
-  drawPath(ctx, { path: frame.path, view, canvasWidth, canvasHeight });
+  drawPath(ctx, {
+    path: frame.path,
+    lockedUntilTick: frame.lockedUntilTick,
+    view,
+    canvasWidth,
+    canvasHeight,
+  });
   drawNodes(ctx, { nodes: frame.nodes, view, canvasWidth, canvasHeight });
   drawHandle(ctx, { handle: frame.handle, view, canvasWidth, canvasHeight });
   drawEvents(ctx, { frame, view, canvasWidth, canvasHeight });
   drawLaunchVector(ctx, { vector: frame.launchVector, view, canvasWidth, canvasHeight });
+  if (frame.commandHorizonMark) {
+    const mark = project(
+      view,
+      canvasWidth,
+      canvasHeight,
+      frame.commandHorizonMark.x,
+      frame.commandHorizonMark.y,
+    );
+    drawCommandHorizonMark(ctx, { mark: { ...frame.commandHorizonMark, x: mark.x, y: mark.y } });
+  }
 }
