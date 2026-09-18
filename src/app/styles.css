@@ -73,6 +73,13 @@ body {
   background: var(--panel);
 }
 
+/* Automatic drop to one times (GAME-0001 §4.11) is announced by inverting the whole status bar for
+   a single rendered frame, never a transition (GAME-0002 §9) -- main.ts toggles this class once
+   per frame, on for exactly the frame after the event lands, off the frame after that. */
+.status-bar--invert {
+  filter: invert(1);
+}
+
 .status-field {
   display: flex;
   flex-direction: column;
@@ -301,6 +308,15 @@ body {
 
 .timeline-cursor::before {
   height: 12px;
+  background: var(--known);
+}
+
+/* The unified event list's own landed marks (GRV-0027): full/bright like the cursor itself, so a
+   real past event reads as distinct from an upcoming (predicted) one, which keeps the plain dim
+   default above -- height and brightness both differ, not colour alone (GAME-0002 §11). */
+.timeline-mark--past::before {
+  height: 12px;
+  margin-bottom: 8px;
   background: var(--known);
 }
 
