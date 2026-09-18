@@ -7,22 +7,46 @@
 // burning per tick plus the events it meets along the way (launch, each node's start/end, closest
 // approach per contact, impact, a body hit).
 //
-// Issuance timing (ADR-0007 §2): `planToCommands` (plan.ts) issues every burn command bundled with
-// the launch -- the probe does not exist yet at commit time, so a node's own arrival can't be
-// solved, and the whole plan travels as one transmission (commands.ts's "same issue batch"). This
-// module's own *internal* trial log instead issues each node's burn command lazily, at
-// `issueTickFor(probe, node.atTick)` -- the latest tick that still gets it there in time -- once
-// the probe actually exists to solve that light cone against. The two are physically equivalent:
-// `activateDueBurnNodes` (sim.ts) only ever cares whether a pending node's `atTick` has arrived and
-// the probe is free, never how long the node sat in the queue first, so the resulting x/y/vx/vy/
-// mass/burning trajectory is bit-identical either way (proven by the ghost invariant test below,
-// which compares against a live sim advanced with the committed, bundled-issuance commands). Lazy
-// issuance is what makes the cache possible: with bundled issuance every node is already committed
-// to the sim's pending-arrivals queue on the very first tick, so a checkpoint taken mid-flight
-// cannot cleanly swap out an edited downstream node -- with lazy issuance, nothing beyond an
-// unissued node exists in the sim yet, so resuming from a checkpoint (taken right before that
-// node's own issue tick) and issuing a fresh (possibly edited) command for it is exactly what a
-// fresh command log entry does.
+// Issuance timing (ADR-0007 §2, GRV-0031): `planToCommands` (plan.ts) issues the launch and every
+// node bundled at the SAME tick -- `issueTickFor(rail, launchTick)` -- because the whole plan
+// travels as one transmission and a bundled burn's own light-cone check is skipped entirely
+// (commands.ts's `resolveBurnProbe`/`checkBurn`, "the launch's own checkLaunch already covers
+// occlusion for that transmission"). A DRAFT's own trial log now issues the launch and every node
+// the identical way, at the identical tick -- ghost issuance IS commit issuance, one code path, no
+// second (lazy, per-node) issuance model to keep in sync with it. This is what resolves the filed
+// limitation (docs/issues/2026-09-18-ghost-lazy-issuance-cannot-cross-a-long-blocked-stretch.md):
+// a node deep inside a long blocked stretch integrates fine now, because it is never re-validated
+// against occlusion at all -- exactly like the committed replay it mirrors.
+//
+// The cache still checkpoints per node, just at a different moment: since every node's command is
+// already queued (sim/commands.ts's `materializeBurn`, sim.ts's own pending-burn-node ring) the
+// instant the batch is issued, "the state right before node k's own command applies" is no longer a
+// single well-defined tick (every node's command applies at the same issue tick). What a checkpoint
+// needs to capture instead is "the state right before node k's own EFFECT could possibly differ" --
+// which is exactly `atTick`, the tick it activates (`activateDueBurnNodes`, sim.ts) -- because
+// nothing about a still-queued node's own prograde/lateral/atTick can change anything the sim does
+// before that instant (sim.pending is state, inert until then). Resuming from such a checkpoint
+// does not re-issue anything through the command log either (there is nothing left to issue -- the
+// whole batch went out at the very first tick, module header, "the commands are already queued"):
+// it swaps the deserialised sim's own still-pending entries for this probe (the cached run's stale
+// values) for the current plan's own nodes from the edited one onward, directly, the same insertion
+// -sorted-by-atTick shape `commands.ts`'s own `materializeBurn` keeps (duplicated here, in full,
+// rather than exported from sim/**, which this unit leaves untouched) -- so a later resume with a
+// downstream edit still substitutes cleanly, exactly as lazy issuance's own checkpoint-then-push
+// used to.
+//
+// Amendments (GRV-0031, ADR-0007 §3): a flying probe's plan is amended by issuing new burn commands
+// to its already-existing object index, `now` -- there is no launch to (re)issue, and the probe's
+// own light-cone check (`checkBurn`) is NOT bundled away this time (the probe already exists), so
+// it is the simulation's own last line of defence against a locked or occluded node exactly as a
+// live commit would be. The world an amendment plans against is not the true state -- "the post
+// plans on what it knows" -- so the amendment ghost starts from the OBSERVED prediction: the
+// committed log replayed to the last observation, then continued (same log, nothing new) to `now`,
+// the exact replay src/app/observed.ts's own `observedObjects` performs, duplicated here in full
+// rather than imported (src/planner depends on neither src/app nor the reverse). An amendment ghost
+// is never cached -- a session touches at most a handful of nodes over a short, already-cheap
+// horizon, and reusing a checkpoint across an edit would need the very same queue-swap resume logic
+// the draft path already carries, for a case that does not need the performance (YAGNI).
 import { advance, createSim, deserializeSim, serializeSim } from '../sim/sim.ts';
 import type { Command, Sim } from '../sim/sim.ts';
 import { evaluateEphemeris } from '../sim/ephemeris/bodies.ts';
@@ -31,6 +55,7 @@ import { contactPoint } from '../sim/contacts.ts';
 import { issueTickFor } from '../sim/lightcone.ts';
 import { sweptSegmentDistance } from '../levels/solve.ts';
 import type { CompiledLevel } from '../levels/compile.ts';
+import { diffAmendmentNodes, existingNodesForProbe } from './plan.ts';
 import type { BurnNode, FlightPlan } from './plan.ts';
 
 export interface GhostSamples {
@@ -65,7 +90,8 @@ export interface Ghost {
   fromTick: number;
   horizonTick: number;
   /** The dynamic-object index the ghost probe occupies in its own (isolated-from-the-caller,
-   *  never touching the live game `Sim`) integration. */
+   *  never touching the live game `Sim`) integration -- for an amendment, the probe being amended,
+   *  read straight from `amend.probe`, never re-derived. */
   probeIndex: number;
   samples: GhostSamples;
   events: GhostEvent[];
@@ -82,9 +108,11 @@ interface ContactBest {
 }
 
 /** Enough to resume node `k`'s own integration without re-running nodes before it (ADR-0005
- *  "Consequences"): the serialised sim right before node `k`'s command would be applied, plus the
+ *  "Consequences"): the serialised sim right before node `k` itself could activate, plus the
  *  event-pairing cursor and the per-contact running closest-approach state at that instant -- both
- *  of those are ongoing accumulators that a plain `deserializeSim` cannot reconstruct on its own. */
+ *  of those are ongoing accumulators that a plain `deserializeSim` cannot reconstruct on its own.
+ *  `tick` is `plan.nodes[k].atTick` at the time this checkpoint was taken (module header: no longer
+ *  an issue tick -- every node's command is already queued well before this). */
 interface Checkpoint {
   tick: number;
   probeIndex: number;
@@ -99,10 +127,20 @@ export interface GhostCache {
   fromTick: number;
   horizonTick: number;
   plan: FlightPlan;
-  /** `checkpoints[i]` = state right before `plan.nodes[i]`'s command applies; shorter than
-   *  `plan.nodes.length` when integration stopped early before reaching every node. */
+  /** `checkpoints[i]` = state right before `plan.nodes[i]` itself activates; shorter than
+   *  `plan.nodes.length` when integration stopped early before reaching every node. `[]` for an
+   *  amendment ghost, which is never cached (module header). */
   checkpoints: Checkpoint[];
   ghost: Ghost;
+}
+
+/** A flying probe's plan is amended by issuing its new/changed nodes now, to its own already-
+ *  existing object index (module header) -- never a relaunch. `observationTick` is the last
+ *  observation the amendment plans against (src/app/observed.ts's own emission tick at the moment
+ *  amendment mode was entered), fixed for the whole session like a draft's own `launchTick`. */
+export interface AmendContext {
+  probe: number;
+  observationTick: number;
 }
 
 type MutableSamples = Omit<GhostSamples, 'count'>;
@@ -129,6 +167,20 @@ function cloneSamples(samples: GhostSamples): MutableSamples {
   };
 }
 
+function sampleProbeInto(
+  samples: MutableSamples,
+  index: number,
+  sim: Sim,
+  probeIndex: number,
+): void {
+  samples.x[index] = sim.objects.x[probeIndex]!;
+  samples.y[index] = sim.objects.y[probeIndex]!;
+  samples.vx[index] = sim.objects.vx[probeIndex]!;
+  samples.vy[index] = sim.objects.vy[probeIndex]!;
+  samples.mass[index] = sim.objects.mass[probeIndex]!;
+  samples.burning[index] = sim.objects.burning[probeIndex]!;
+}
+
 function makeEph(n: number): EphemerisOut {
   return {
     x: new Float64Array(n),
@@ -151,36 +203,49 @@ function captureContactOutcomes(sim: Sim): GhostContactOutcome[] {
   return outcomes;
 }
 
-/** The committed `log` plus the plan's own launch, issued at `issueTickFor(rail, launchTick)` (the
- *  latest tick that still arrives exactly at `launchTick` -- ADR-0007 §2): sorted by tick. Node
- *  commands are NOT included here -- `runLoop`'s own `maybeIssueNodes` appends each one lazily, at
- *  the tick it actually needs to go out (module header), which requires the probe to already exist
- *  in `sim` and so can't be precomputed before integration starts. `advance`'s cursor skips
- *  anything already behind `sim.tick`, so this same array is correct whether integration starts
- *  cold at `fromTick` or resumes from a mid-flight checkpoint. Mutated in place by `runLoop` (nodes
- *  pushed on as they're issued) -- the array identity is never shared with a caller. */
-function buildLaunchLog({
+function initialContactBest(sim: Sim): ContactBest[] {
+  return sim.contacts.count > 0
+    ? Array.from({ length: sim.contacts.count }, () => ({ distance: Infinity, tick: -1 }))
+    : [];
+}
+
+/** The committed `log` plus the plan's own launch and every node, all issued at
+ *  `issueTickFor(rail, launchTick)` (the latest tick that still arrives exactly at `launchTick` --
+ *  ADR-0007 §2): sorted by tick, launch first (module header -- "ghost issuance is commit
+ *  issuance"). `advance`'s cursor skips anything already behind `sim.tick`, so this same array is
+ *  correct whether integration starts cold at `fromTick` or resumes from a node's own checkpoint
+ *  (by then every command in it has tick < sim.tick and nothing here is re-applied -- what resuming
+ *  actually needs is already in the deserialised sim's own state, module header). */
+function buildTrialLog({
   sim,
   log,
   plan,
+  probeIndex,
 }: {
   sim: Sim;
   log: readonly Command[];
   plan: FlightPlan;
+  probeIndex: number;
 }): Command[] {
   const issueTick = issueTickFor({
     sim,
     target: { kind: 'rail', rail: plan.rail },
     atTick: plan.launchTick,
   });
-  const launch: Command = {
-    tick: issueTick,
-    kind: 'launch',
-    rail: plan.rail,
-    heading: plan.heading,
-    speed: plan.speed,
-  };
-  return [...log, launch].sort((a, b) => a.tick - b.tick);
+  const commands: Command[] = [
+    { tick: issueTick, kind: 'launch', rail: plan.rail, heading: plan.heading, speed: plan.speed },
+  ];
+  for (const node of plan.nodes) {
+    commands.push({
+      tick: issueTick,
+      kind: 'burn',
+      probe: probeIndex,
+      atTick: node.atTick,
+      prograde: node.prograde,
+      lateral: node.lateral,
+    });
+  }
+  return [...log, ...commands].sort((a, b) => a.tick - b.tick);
 }
 
 function nodesEqual(a: BurnNode, b: BurnNode): boolean {
@@ -209,7 +274,8 @@ type ResumePlan =
  *  launch itself changing invalidates the whole cache (`cold`); otherwise the first node that
  *  differs from the cached plan picks a checkpoint to resume from, falling back to `cold` when no
  *  checkpoint reaches that far (the cached run stopped early, or a node was appended beyond what
- *  was ever tracked) or the edited node's own `atTick` would require running backwards in time. */
+ *  was ever tracked) or the edited node's own `atTick` would require running backwards in time
+ *  (earlier than the checkpoint's own tick, which is exactly `atTick` now -- module header). */
 function planResume({
   cache,
   level,
@@ -248,12 +314,62 @@ function planResume({
   return { kind: 'resume', nodeIndex: k, checkpoint };
 }
 
+/** Mirrors commands.ts's `materializeBurn` insertion-sort exactly (src/sim/** is off limits this
+ *  unit, so this duplicates the small, atTick-sorted insertion rather than exporting a new sim
+ *  query for it) -- ghost.ts already reaches into a `Sim`'s own typed arrays directly elsewhere
+ *  (`sim.objects.x` and friends); this is the same boundary, just on `sim.pending`. */
+function insertPendingBurn(
+  sim: Sim,
+  node: { object: number; atTick: number; prograde: number; lateral: number },
+): void {
+  const pending = sim.pending;
+  if (pending.count >= pending.object.length) {
+    throw new Error(`ghost: pending burn queue capacity ${pending.object.length} exceeded`);
+  }
+  let p = pending.count;
+  while (p > 0 && pending.atTick[p - 1]! > node.atTick) {
+    pending.object[p] = pending.object[p - 1]!;
+    pending.atTick[p] = pending.atTick[p - 1]!;
+    pending.prograde[p] = pending.prograde[p - 1]!;
+    pending.lateral[p] = pending.lateral[p - 1]!;
+    p--;
+  }
+  pending.object[p] = node.object;
+  pending.atTick[p] = node.atTick;
+  pending.prograde[p] = node.prograde;
+  pending.lateral[p] = node.lateral;
+  pending.count++;
+}
+
+/** Removes every not-yet-fired pending entry for `probeIndex` at or after `fromAtTick` -- exactly
+ *  the stale suffix a resumed checkpoint's own `sim.pending` carries over from the cached (pre-edit)
+ *  plan (module header, "the commands are already queued"): everything strictly before `fromAtTick`
+ *  either already fired (removed from the queue by `activateDueBurnNodes`, sim.ts) or -- the one
+ *  case this does not chase, a node still waiting past its own `atTick` because the probe was busy
+ *  finishing an earlier burn -- is untouched by this edit and left exactly where it is. */
+function clearStalePendingBurns(sim: Sim, probeIndex: number, fromAtTick: number): void {
+  const pending = sim.pending;
+  let write = 0;
+  for (let read = 0; read < pending.count; read++) {
+    const stale = pending.object[read] === probeIndex && pending.atTick[read]! >= fromAtTick;
+    if (!stale) {
+      if (write !== read) {
+        pending.object[write] = pending.object[read]!;
+        pending.atTick[write] = pending.atTick[read]!;
+        pending.prograde[write] = pending.prograde[read]!;
+        pending.lateral[write] = pending.lateral[read]!;
+      }
+      write++;
+    }
+  }
+  pending.count = write;
+}
+
 interface RunLoopArgs {
   sim: Sim;
   level: CompiledLevel;
   probeIndex: number;
   trialLog: Command[];
-  plan: FlightPlan;
   fromTick: number;
   horizonTick: number;
   startIndex: number;
@@ -262,20 +378,24 @@ interface RunLoopArgs {
   checkpoints: Checkpoint[];
   contactBest: ContactBest[];
   nodeCursor: number;
-  issueNodeCursor: number;
+  /** The nodes to checkpoint against, in atTick order -- `plan.nodes` for a draft (every node was
+   *  batch-issued at the very start, module header) or `[]` for an amendment (never cached). Cursor
+   *  starts at `checkpointCursor`, decoupled from `nodeCursor` (the event-labelling cursor, which
+   *  always walks `plan.nodes` in full order regardless of caching). */
+  trackedNodes: readonly BurnNode[];
+  checkpointCursor: number;
 }
 
 /** Advances `sim` one tick at a time from `startIndex` (already sampled -- either the fresh base
  *  state or a checkpoint's own instant) to `horizonTick`, writing every further sample and event
- *  and lazily issuing (and checkpointing before) each not-yet-issued node once its own
- *  `issueTickFor` tick arrives (module header). Stops early on an impact or a body hit (ADR-0005
- *  "Burns": an expended object never moves again). */
+ *  and checkpointing right before each of `trackedNodes` reaches its own `atTick` (module header).
+ *  Stops early on an impact or a body hit (ADR-0005 "Burns": an expended object never moves
+ *  again). */
 function runLoop({
   sim,
   level,
   probeIndex,
   trialLog,
-  plan,
   fromTick,
   horizonTick,
   startIndex,
@@ -284,7 +404,8 @@ function runLoop({
   checkpoints,
   contactBest,
   nodeCursor,
-  issueNodeCursor,
+  trackedNodes,
+  checkpointCursor,
 }: RunLoopArgs): { ticksIntegrated: number; finalIndex: number } {
   const contactCount = sim.contacts.count;
   const eph = makeEph(sim.bodies.count);
@@ -305,21 +426,13 @@ function runLoop({
   let existedPrev = probeIndex < sim.objects.count;
 
   let nextPairIndex = nodeCursor;
-  let nextIssueIndex = issueNodeCursor;
+  let nextCheckpointIndex = checkpointCursor;
 
-  // Issues every node whose latest safe issue tick (issueTickFor) has arrived, checkpointing
-  // `sim`'s state right before each one -- so a later resume with an edited node substitutes a
-  // fresh command for it, exactly as if it had never been issued (module header). Needs the probe
-  // to already exist: before its launch arrives this is a no-op every call.
-  const maybeIssueNodes = (): void => {
-    while (nextIssueIndex < plan.nodes.length && probeIndex < sim.objects.count) {
-      const node = plan.nodes[nextIssueIndex]!;
-      const issueTick = issueTickFor({
-        sim,
-        target: { kind: 'object', object: probeIndex },
-        atTick: node.atTick,
-      });
-      if (issueTick > sim.tick) break;
+  const maybeCheckpoint = (): void => {
+    while (
+      nextCheckpointIndex < trackedNodes.length &&
+      trackedNodes[nextCheckpointIndex]!.atTick <= sim.tick
+    ) {
       checkpoints.push({
         tick: sim.tick,
         probeIndex,
@@ -327,18 +440,10 @@ function runLoop({
         bytes: serializeSim(sim),
         contactBest: contactBest.map((b) => ({ ...b })),
       });
-      trialLog.push({
-        tick: sim.tick,
-        kind: 'burn',
-        probe: probeIndex,
-        atTick: node.atTick,
-        prograde: node.prograde,
-        lateral: node.lateral,
-      });
-      nextIssueIndex++;
+      nextCheckpointIndex++;
     }
   };
-  maybeIssueNodes();
+  maybeCheckpoint();
 
   let ticksIntegrated = 0;
 
@@ -352,12 +457,7 @@ function runLoop({
     // which is `sim.tick` *after* this call's increment (the sample's own "now").
     const eventTick = tick - 1;
 
-    samples.x[index] = sim.objects.x[probeIndex]!;
-    samples.y[index] = sim.objects.y[probeIndex]!;
-    samples.vx[index] = sim.objects.vx[probeIndex]!;
-    samples.vy[index] = sim.objects.vy[probeIndex]!;
-    samples.mass[index] = sim.objects.mass[probeIndex]!;
-    samples.burning[index] = sim.objects.burning[probeIndex]!;
+    sampleProbeInto(samples, index, sim, probeIndex);
 
     if (samples.burning[index - 1] === 0 && samples.burning[index] === 1) {
       events.push({ kind: 'nodeStart', tick: eventTick, node: nextPairIndex });
@@ -400,7 +500,7 @@ function runLoop({
     }
     if (stopped) break;
 
-    maybeIssueNodes();
+    maybeCheckpoint();
   }
 
   return { ticksIntegrated, finalIndex: index };
@@ -412,7 +512,7 @@ function runLoop({
  *  real game log ("everything already committed"); it is replayed first to reproduce the world at
  *  `fromTick`, exactly once, before the plan is ever applied. Pass back the returned `cache` on the
  *  next call (after editing `plan`) to reuse everything up to the earliest node that changed. */
-export function integrateGhost({
+function integrateDraftGhost({
   level,
   log,
   plan,
@@ -443,7 +543,7 @@ export function integrateGhost({
   let checkpoints: Checkpoint[];
   let contactBest: ContactBest[];
   let nodeCursor: number;
-  let issueNodeCursor: number;
+  let checkpointCursor: number;
 
   if (resume.kind === 'resume') {
     const checkpoint = resume.checkpoint;
@@ -454,46 +554,45 @@ export function integrateGhost({
     events = cache!.ghost.events.filter(
       (e) => e.kind !== 'launch' && e.kind !== 'closestApproach' && e.tick < checkpoint.tick,
     );
-    // checkpoint itself is `resume.nodeIndex`'s own checkpoint -- taken right before that node was
-    // issued (module header), so it has NOT been issued in this snapshot yet: keep only the
-    // earlier checkpoints (maybeIssueNodes will freshly record and re-issue this one, from the
-    // possibly-edited plan) and resume the issue cursor there, not past it.
+    // checkpoint itself is `resume.nodeIndex`'s own checkpoint -- taken right before that node
+    // could activate (module header), so its own (possibly stale) value is still sitting in
+    // sim.pending: swap it, and everything after it, for the current plan's own nodes.
     checkpoints = cache!.checkpoints.slice(0, resume.nodeIndex);
     contactBest = checkpoint.contactBest.map((b) => ({ ...b }));
     nodeCursor = checkpoint.nodeCursor;
-    issueNodeCursor = resume.nodeIndex;
+    checkpointCursor = resume.nodeIndex;
+    clearStalePendingBurns(sim, probeIndex, checkpoint.tick);
+    for (const node of plan.nodes.slice(resume.nodeIndex)) {
+      insertPendingBurn(sim, {
+        object: probeIndex,
+        atTick: node.atTick,
+        prograde: node.prograde,
+        lateral: node.lateral,
+      });
+    }
   } else {
     sim = createSim({ scenario: level.scenario, seed: level.seed });
     advance({ sim, log, ticks: fromTick });
     probeIndex = sim.objects.count;
     startIndex = 0;
     samples = createSamples(totalLength);
-    samples.x[0] = sim.objects.x[probeIndex]!;
-    samples.y[0] = sim.objects.y[probeIndex]!;
-    samples.vx[0] = sim.objects.vx[probeIndex]!;
-    samples.vy[0] = sim.objects.vy[probeIndex]!;
-    samples.mass[0] = sim.objects.mass[probeIndex]!;
-    samples.burning[0] = sim.objects.burning[probeIndex]!;
+    sampleProbeInto(samples, 0, sim, probeIndex);
     events = [];
     checkpoints = [];
-    contactBest =
-      sim.contacts.count > 0
-        ? Array.from({ length: sim.contacts.count }, () => ({ distance: Infinity, tick: -1 }))
-        : [];
+    contactBest = initialContactBest(sim);
     nodeCursor = 0;
-    issueNodeCursor = 0;
+    checkpointCursor = 0;
   }
 
   events.push({ kind: 'launch', tick: plan.launchTick });
 
-  const trialLog = buildLaunchLog({ sim, log, plan });
+  const trialLog = buildTrialLog({ sim, log, plan, probeIndex });
 
   const { ticksIntegrated, finalIndex } = runLoop({
     sim,
     level,
     probeIndex,
     trialLog,
-    plan,
     fromTick,
     horizonTick,
     startIndex,
@@ -502,7 +601,8 @@ export function integrateGhost({
     checkpoints,
     contactBest,
     nodeCursor,
-    issueNodeCursor,
+    trackedNodes: plan.nodes,
+    checkpointCursor,
   });
 
   for (let c = 0; c < contactBest.length; c++) {
@@ -529,4 +629,120 @@ export function integrateGhost({
   const newCache: GhostCache = { level, log, fromTick, horizonTick, plan, checkpoints, ghost };
 
   return { ghost, cache: newCache };
+}
+
+/** An amendment's own ghost (module header): starts from the OBSERVED prediction, not the true
+ *  state -- the committed log replayed to `amend.observationTick` (the last real telemetry), then
+ *  continued with the same log (nothing new to apply) to `fromTick` ("now"), duplicating src/app/
+ *  observed.ts's own two-stage replay rather than importing it (src/planner imports neither
+ *  src/app nor the reverse). `diffAmendmentNodes` (plan.ts) picks exactly the nodes this amendment
+ *  actually needs to transmit -- an untouched existing node is never re-issued, so this never
+ *  double-queues a burn already sitting in the replayed sim's own pending-node ring. Never cached
+ *  (module header). */
+function integrateAmendGhost({
+  level,
+  log,
+  plan,
+  fromTick,
+  horizonTick,
+  amend,
+}: {
+  level: CompiledLevel;
+  log: readonly Command[];
+  plan: FlightPlan;
+  fromTick: number;
+  horizonTick: number;
+  amend: AmendContext;
+}): { ghost: Ghost; cache: GhostCache } {
+  const sim = createSim({ scenario: level.scenario, seed: level.seed });
+  advance({ sim, log, ticks: amend.observationTick });
+  if (fromTick > amend.observationTick) {
+    advance({ sim, log, ticks: fromTick - amend.observationTick });
+  }
+
+  const probeIndex = amend.probe;
+  const totalLength = horizonTick - fromTick + 1;
+  const samples = createSamples(totalLength);
+  sampleProbeInto(samples, 0, sim, probeIndex);
+  const events: GhostEvent[] = [];
+  const contactBest = initialContactBest(sim);
+
+  const existing = existingNodesForProbe({ log, probe: probeIndex });
+  const toIssue = diffAmendmentNodes({ existing, nodes: plan.nodes });
+  const trialLog: Command[] = [
+    ...log,
+    ...toIssue.map((node): Command => ({
+      tick: fromTick,
+      kind: 'burn',
+      probe: probeIndex,
+      atTick: node.atTick,
+      prograde: node.prograde,
+      lateral: node.lateral,
+    })),
+  ].sort((a, b) => a.tick - b.tick);
+
+  const { ticksIntegrated, finalIndex } = runLoop({
+    sim,
+    level,
+    probeIndex,
+    trialLog,
+    fromTick,
+    horizonTick,
+    startIndex: 0,
+    samples,
+    events,
+    checkpoints: [],
+    contactBest,
+    nodeCursor: 0,
+    trackedNodes: [],
+    checkpointCursor: 0,
+  });
+
+  for (let c = 0; c < contactBest.length; c++) {
+    const best = contactBest[c]!;
+    if (best.tick !== -1)
+      events.push({
+        kind: 'closestApproach',
+        tick: best.tick,
+        contact: c,
+        distance: best.distance,
+      });
+  }
+
+  const ghost: Ghost = {
+    fromTick,
+    horizonTick,
+    probeIndex,
+    samples: { ...samples, count: finalIndex + 1 },
+    events,
+    contacts: captureContactOutcomes(sim),
+    ticksIntegrated,
+  };
+
+  // Never reused (module header): the returned cache carries no checkpoints, so a future call
+  // that (mistakenly) passed it back in would simply find nothing to resume from -- harmless, but
+  // integrateGhost's own amend branch never even looks at an incoming cache, so this is never read.
+  const cache: GhostCache = { level, log, fromTick, horizonTick, plan, checkpoints: [], ghost };
+  return { ghost, cache };
+}
+
+export function integrateGhost({
+  level,
+  log,
+  plan,
+  fromTick,
+  horizonTick,
+  cache,
+  amend,
+}: {
+  level: CompiledLevel;
+  log: readonly Command[];
+  plan: FlightPlan;
+  fromTick: number;
+  horizonTick: number;
+  cache?: GhostCache;
+  amend?: AmendContext;
+}): { ghost: Ghost; cache: GhostCache } {
+  if (amend) return integrateAmendGhost({ level, log, plan, fromTick, horizonTick, amend });
+  return integrateDraftGhost({ level, log, plan, fromTick, horizonTick, cache });
 }

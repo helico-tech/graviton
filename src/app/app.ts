@@ -14,10 +14,11 @@ import type { CompiledLevel } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
 import { createObservedCache } from './observed.ts';
 import type { ObservedCache, ObservedObject } from './observed.ts';
-import { predictProbe } from './predict.ts';
+import { predictProbe, predictProbePath } from './predict.ts';
 import {
   GHOST_HORIZON_TICKS,
   addNode as plannerAddNode,
+  beginAmend as plannerBeginAmend,
   beginLaunchDrag as plannerBeginLaunchDrag,
   beginNodeDrag as plannerBeginNodeDrag,
   createPlannerState,
@@ -31,7 +32,7 @@ import {
   updateLaunchDrag as plannerUpdateLaunchDrag,
   updateNodeDrag as plannerUpdateNodeDrag,
 } from './planner.ts';
-import type { Drag, PlannerState } from './planner.ts';
+import type { CommandHorizon, Drag, PlannerMode, PlannerState } from './planner.ts';
 import { selectionName as selectionNameOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
 import { getSolution } from './solutions.ts';
@@ -50,11 +51,13 @@ import type { WarpRung } from './warp.ts';
 import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
+import { diffAmendmentNodes } from '../planner/plan.ts';
 import type { FlightPlan } from '../planner/plan.ts';
 import type { Ghost } from '../planner/ghost.ts';
 import { solutionReadout } from '../planner/readout.ts';
 import type { SolutionReadout } from '../planner/readout.ts';
 import { formatDuration } from '../ui/format.ts';
+import type { UplinkWindow } from '../ui/timeline.ts';
 
 const EMPTY_LEVEL_NAMES: FrameLevelNames = {
   bodyIds: [],
@@ -193,8 +196,10 @@ export interface App {
   // layer is responsible for not calling the drag updaters more than once per animation frame
   // (design note), not this module for debouncing them itself.
   plan(): FlightPlan | null;
-  /** Replaces the draft outright (debug API's own `setPlan`) -- clears any in-progress drag and
-   *  selection, then reintegrates. */
+  /** Replaces the draft's own data outright (debug API's own `setPlan`) -- clears any in-progress
+   *  drag and selection, then reintegrates. Mode-preserving (GRV-0031): called while amending, it
+   *  stays in 'amend' mode with the same amended probe; `beginAmend`/`beginLaunchDrag` are the
+   *  actual mode transitions. */
   setPlan(plan: FlightPlan): void;
   discardDraft(): void;
   beginLaunchDrag(args: { rail: number; worldX: number; worldY: number }): void;
@@ -238,6 +243,27 @@ export interface App {
    *  anything, so a caller (main.ts's Commit handler) can show them rather than let an uncaught
    *  error reach the console. */
   commitPlan(): { committed: true } | { committed: false; issues: string[] };
+
+  // -- Amendments (GRV-0031, GAME-0001 §4.4, ADR-0007 §2-3) -----------------------------------
+  /** The draft's own mode -- 'draft' plans a fresh launch, 'amend' revises an already-flying
+   *  probe's plan. */
+  mode(): PlannerMode;
+  /** The object index being amended, `null` in 'draft' mode. */
+  amendProbe(): number | null;
+  /** Opens `probe`'s plan for amendment (the `N` key, main.ts): the draft becomes its own already-
+   *  committed nodes still ahead of now, planned against the OBSERVED prediction (`observed(probe)`
+   *  at the moment this is called), not the true state -- "the post plans on what it knows".
+   *  `false`, a no-op, if `probe` has never launched or has no observation yet to plan against. */
+  beginAmend(probe: number): boolean;
+  /** Where an order sent right now first takes effect (GAME-0001 §4.6 "command horizon"):
+   *  a draft's own launch issue/arrival tick, or an amendment's uplink arrival to the probe being
+   *  amended. `null` without a draft, or (amend mode) once the amended probe no longer exists. */
+  commandHorizon(): CommandHorizon | null;
+  /** The uplink availability band's own occlusion windows (GRV-0031, src/ui/timeline.ts's
+   *  `computeUplinkWindows`): sampled over the drafted/amended ghost's own predicted path, or,
+   *  without one, the selected probe's predicted flight (src/app/predict.ts's `predictProbePath`).
+   *  `[]` without either. */
+  uplinkWindows(): readonly UplinkWindow[];
 }
 
 /** A raw `{ scenario, seed }` load (the parity-spec path) carries no compiled level, but the
@@ -300,6 +326,15 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   // Keyed by probe index; invalidated by log length rather than reference (debug-api.ts's log is
   // mutated in place by `command`, so `session.log()` never changes reference within a session).
   const predictionCache = new Map<number, { atLogLength: number; events: SimEvent[] }>();
+  // uplinkWindows() (GRV-0031): occlusion windows are a fixed geometric property of a flight, not
+  // of "now" -- cached exactly like predictionCache above (by probe, invalidated on log growth) so
+  // a selected-but-not-drafted probe's own windows are computed once per commit, not once per
+  // render/tick (main.ts's onChange calls this every step -- a naive GHOST_HORIZON_TICKS-deep
+  // recompute every tick would be a real stutter, not a hypothetical one). The ghost (draft/amend)
+  // case caches by the ghost's own object identity instead -- `reintegratePlan` only ever produces
+  // a new one when the draft actually changed.
+  const uplinkCache = new Map<number, { atLogLength: number; windows: readonly UplinkWindow[] }>();
+  let lastGhostWindows: { ghost: Ghost; windows: readonly UplinkWindow[] } | null = null;
   // The observed view (GRV-0030, src/app/observed.ts): the replay cache (persists for the loaded
   // session's whole lifetime, GRV-0030 module doc) and every object's own latest view, refreshed
   // once per `step`.
@@ -313,6 +348,8 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     pendingInvert = false;
     warpTarget = null;
     predictionCache.clear();
+    uplinkCache.clear();
+    lastGhostWindows = null;
     observedCache = createObservedCache();
     currentObserved = [];
   }
@@ -476,18 +513,53 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   }
 
   /** Every known future event tick, labelled (GRV-0027 design note: "committed log commands with
-   *  tick > now ... and predictions for running probes"). The draft ghost's own events are *not*
-   *  folded in here -- they already have their own `ghost.*` timeline marks (GRV-0026) and
-   *  `nextEventTick` reads them directly, so this stays the two sources that have no other
-   *  representation yet: future committed commands and running-probe predictions. */
+   *  tick > now ... and predictions for running probes"; GRV-0031 extends both sources). The draft
+   *  ghost's own events are *not* folded in here -- they already have their own `ghost.*` timeline
+   *  marks (GRV-0026) and `nextEventTick` reads them directly (`commandHorizonTarget` below is the
+   *  one addition specific to the draft: its own issue tick, which has no ghost event of its own).
+   *
+   *  GRV-0031: a command whose issue tick has already passed but which has not yet materialised
+   *  (a genuinely delayed post, `session.pendingCommandArrivals()`) now targets its own arrival
+   *  tick instead of being silently dropped -- the dead zone this unit resolves (docs/issues/
+   *  2026-09-18-warptoevent-dead-zone-for-a-delayed-post.md): before this fix, a command with
+   *  `tick <= nowTick` was `continue`d past with nothing to replace it, and `nextEventTick()` would
+   *  go `null` until materialisation on its own, seconds after the fact, closed the gap. A command
+   *  not yet issued (`command.tick > nowTick`) is unaffected -- it was never in the dead zone, and
+   *  is never also pending (a command only enters `pendingArrivals` once `advance` actually applies
+   *  it, at `command.tick`). Predicted events (`predictedEventsFor`) now target their own
+   *  `arrivalTick` when they have one (impact, GRV-0031's `downlinkArrivalOf`) rather than the bare
+   *  true tick a player cannot act on any sooner than telemetry allows -- `closestApproach` has
+   *  none (a prediction, never confirmed by telemetry, ADR-0007 §6) and keeps targeting `tick`. */
   function upcomingEvents(): { tick: number; label: string }[] {
     if (!currentLevel) return [];
     const nowTick = session.state().tick;
     const results: { tick: number; label: string }[] = [];
 
     for (const command of session.log()) {
-      if (command.tick <= nowTick) continue;
-      results.push({ tick: command.tick, label: command.kind === 'launch' ? 'LAUNCH' : 'BURN' });
+      if (command.tick > nowTick) {
+        results.push({ tick: command.tick, label: command.kind === 'launch' ? 'LAUNCH' : 'BURN' });
+      }
+    }
+    for (const pending of session.pendingCommandArrivals()) {
+      if (pending.arrivalTick > nowTick) {
+        results.push({
+          tick: pending.arrivalTick,
+          label: pending.kind === 'launch' ? 'LAUNCH' : 'BURN',
+        });
+      }
+    }
+
+    // The draft's own issue tick (GRV-0031, GAME-0001 §4.6 "command horizon"): not yet a real
+    // command (nothing here until commitPlan() actually sends it), so it has no representation in
+    // session.log() at all -- surfaced here so warping toward it shows the player when committing
+    // right now would actually leave the post. Amend mode has no launch of its own to preview this
+    // way (its own issueTick is simply "now").
+    if (
+      plannerState.mode === 'draft' &&
+      plannerState.commandHorizon &&
+      plannerState.commandHorizon.issueTick > nowTick
+    ) {
+      results.push({ tick: plannerState.commandHorizon.issueTick, label: 'DRAFT ISSUE' });
     }
 
     const snap = session.state();
@@ -495,7 +567,8 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       const obj = snap.objects[i]!;
       if (obj.hitBody !== -1 || obj.hitContact !== -1) continue; // expended, no more events
       for (const event of predictedEventsFor(i)) {
-        if (event.tick > nowTick) results.push({ tick: event.tick, label: eventText(event) });
+        const tick = event.arrivalTick ?? event.tick;
+        if (tick > nowTick) results.push({ tick, label: eventText(event) });
       }
     }
 
@@ -766,11 +839,89 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       return { committed: false, issues: ['no draft to commit'] };
     }
 
-    const probeIndex = session.state().count;
-    session.commitPlan({ plan: draft, probeIndex });
+    if (plannerState.mode === 'amend') {
+      // Only the changed/added nodes (GRV-0031, plan.ts's own `diffAmendmentNodes` doc) -- exactly
+      // what the amendment's own ghost just previewed (`reintegratePlan`'s amend path issues the
+      // identical diff), issued now, to the amended probe's own already-existing index.
+      const probe = plannerState.amendProbe!;
+      const toIssue = diffAmendmentNodes({
+        existing: plannerState.amendExistingNodes,
+        nodes: draft.nodes,
+      });
+      session.commitAmendment({ probe, nodes: toIssue, issueTick: session.state().tick });
+    } else {
+      const probeIndex = session.state().count;
+      session.commitPlan({ plan: draft, probeIndex });
+    }
     plannerState = plannerDiscardDraft(plannerState);
     emit();
     return { committed: true };
+  }
+
+  /** Opens `probe`'s plan for amendment (GRV-0031, App interface doc): planned against its
+   *  observed prediction as of right now (`currentObserved`, refreshed once per `step` alongside
+   *  trails/events, src/app/observed.ts) -- "the post plans on what it knows," never the true
+   *  state. `false` without an observation yet, or if `probe` never launched at all
+   *  (`plannerBeginAmend`'s own no-op, detected by reference equality: it returns `state`
+   *  unchanged rather than throwing, the same convention `updateLaunchDrag`'s own no-op guard
+   *  uses). */
+  function beginAmend(probe: number): boolean {
+    if (!currentLevel) return false;
+    const observation = currentObserved[probe]?.observation;
+    if (!observation) return false;
+
+    const next = plannerBeginAmend({
+      state: plannerState,
+      log: session.log(),
+      probe,
+      nowTick: session.state().tick,
+      observationTick: observation.tick,
+    });
+    if (next === plannerState) return false;
+    plannerState = next;
+    reintegratePlan();
+    emit();
+    return true;
+  }
+
+  /** `uplinkWindows()`'s own occlusion windows (GRV-0031, GAME-0001 §4.6 "for the drafted or
+   *  selected probe"), cached (module doc: this is called every render, not once per commit).
+   *  The drafted/amended ghost's own path when there is one -- reused verbatim by object identity,
+   *  since `reintegratePlan` only ever produces a new `Ghost` when the draft actually changed.
+   *  Otherwise the selected (not being planned) probe's own predicted flight, from its own launch
+   *  to a generous horizon (src/app/predict.ts's `predictProbePath`) -- windows are a fixed
+   *  geometric property of the whole flight, not of "now", so this is cached by probe and log
+   *  length exactly like `predictedEventsFor` above, independent of how far `step`/`warpTo` has
+   *  since moved. `[]` with neither a ghost nor a selected probe. */
+  function computeCurrentUplinkWindows(): readonly UplinkWindow[] {
+    const ghost = plannerState.ghost;
+    if (ghost) {
+      if (lastGhostWindows && lastGhostWindows.ghost === ghost) return lastGhostWindows.windows;
+      const path: { tick: number; x: number; y: number }[] = new Array(ghost.samples.count);
+      for (let i = 0; i < ghost.samples.count; i++) {
+        path[i] = { tick: ghost.fromTick + i, x: ghost.samples.x[i]!, y: ghost.samples.y[i]! };
+      }
+      const windows = session.uplinkWindows({ path });
+      lastGhostWindows = { ghost, windows };
+      return windows;
+    }
+
+    if (!currentLevel || currentSelection?.kind !== 'probe') return [];
+    const probe = currentSelection.index;
+    const log = session.log();
+    const cached = uplinkCache.get(probe);
+    if (cached && cached.atLogLength === log.length) return cached.windows;
+
+    const path = predictProbePath({
+      level: currentLevel,
+      log,
+      probe,
+      fromTick: 0,
+      horizonTick: GHOST_HORIZON_TICKS,
+    });
+    const windows = session.uplinkWindows({ path });
+    uplinkCache.set(probe, { atLogLength: log.length, windows });
+    return windows;
   }
 
   return {
@@ -894,5 +1045,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     },
     horizon: () => plannerState.horizon,
     commitPlan,
+    mode: () => plannerState.mode,
+    amendProbe: () => plannerState.amendProbe,
+    beginAmend,
+    commandHorizon: () => plannerState.commandHorizon,
+    uplinkWindows: () => (currentLevel ? computeCurrentUplinkWindows() : []),
   };
 }

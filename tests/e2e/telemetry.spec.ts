@@ -136,33 +136,55 @@ test('the impact event fires at its arrival tick, carrying both the true and the
   expect(gate.violations()).toEqual([]);
 });
 
-// nextEventTick()'s committed-command branch (src/app/app.ts's upcomingEvents, unchanged by
-// GRV-0030) still targets the command's own *issue* tick, same as before ADR-0007: for a
-// co-located post (L01) that is also when it takes effect, but for a post genuinely offset from
-// its rail (T01) it lands well before the probe even materialises. `nextEventTick()` then goes
-// null (nothing exists yet to predict from) until materialisation, so -- exactly like the
-// existing L01 impact case (app.test.ts, tests/e2e/events.spec.ts: a predicted event that lands
-// before its own telemetry does) -- `warpToEvent()` alone does not carry the player all the way
-// there; the same manual-warp recourse events.spec.ts already uses for L01's impact resolves it
-// here too (docs/issues/2026-09-18-warptoevent-dead-zone-for-a-delayed-post.md has the full
-// analysis). `step()`'s own automatic drop-to-1x still fires the moment real telemetry lands
-// regardless of how the tick was reached.
-test('warpToEvent() alone stalls in the issue-to-materialisation gap; warping on reaches the launch telemetry event', async ({
+// GRV-0031, docs/issues/2026-09-18-warptoevent-dead-zone-for-a-delayed-post.md (resolved): before
+// this unit, nextEventTick()'s committed-command branch (src/app/app.ts's upcomingEvents) targeted
+// only the command's own *issue* tick -- for a co-located post (L01) that is also when it takes
+// effect, but for a post genuinely offset from its rail (T01) it landed well before the probe even
+// materialised, and nextEventTick() then went null (nothing left to predict from) until
+// materialisation caught up on its own, stalling `warpToEvent()` in between. It no longer does:
+// a still-pending command now targets its own arrival tick (session.pendingCommandArrivals()), and
+// a predicted impact targets its own downlink-confirmed tick (downlinkArrivalOf), not the bare true
+// tick a player cannot act on any sooner than telemetry allows -- three real presses now, issue,
+// materialisation, impact confirmation, no dead zone in between.
+test('warpToEvent() no longer stalls: presses land on the issue tick, materialisation, then the predicted impact’s own downlink confirmation', async ({
   page,
 }) => {
   const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
   await loadT01(page);
 
+  // Press 1: the committed launch's own issue tick (5724) -- always reachable, never itself in
+  // the dead zone (it precedes it).
   await page.evaluate(() => window.graviton!.warpToEvent());
   let state = await page.evaluate(() => window.graviton!.state());
-  expect(state.tick).toBeLessThan(T01_LAUNCH_TICK); // stalled well before the probe even exists
-  expect(await page.evaluate(() => window.graviton!.nextEventTick())).toBeNull();
+  expect(state.tick).toBe(5725); // one past the issue tick (5724)
 
-  await page.evaluate((t) => window.graviton!.warpTo(t), T01_LAUNCH_ARRIVAL_TICK + 1);
-  const readouts = await page.evaluate(() => window.graviton!.readouts());
+  // Press 2: the still-pending command's own arrival tick (5744) -- before this unit,
+  // nextEventTick() went null here and this press did nothing at all. The probe now exists in
+  // the live sim, but its own telemetry hasn't reached the post yet (not due until 5764, the
+  // other telemetry test above) -- observed(0) confirms materialised-but-not-yet-observed, the
+  // same state that test checks a few ticks in.
+  await page.evaluate(() => window.graviton!.warpToEvent());
   state = await page.evaluate(() => window.graviton!.state());
-  expect(readouts['status.event']).toBe('LAUNCH PRB-01');
-  expect(state.tick).toBe(T01_LAUNCH_ARRIVAL_TICK + 1);
+  expect(state.tick).toBe(T01_LAUNCH_TICK + 1); // one past materialisation
+  const midFlightObserved = await page.evaluate(() => window.graviton!.observed(0));
+  expect(midFlightObserved!.observation).toBeNull();
+
+  // Press 3: the predicted impact's own downlink-confirmed tick (src/app/predict.ts's
+  // `downlinkArrivalOf`) -- real progress, past materialisation, toward (but not necessarily
+  // exactly at) the real telemetry confirmation: `downlinkArrivalOf` is a pure light-cone geometry
+  // solve with no occlusion check, unlike `observedState`'s own, and this level's post-impact
+  // geometry has a brief occlusion window the real confirmation waits out (confirmed directly:
+  // predicted 5826, real 5831) -- `downlinkArrivalOf`'s own doc has the full account. Warping on
+  // the small remaining gap confirms it once real telemetry actually catches up, the same
+  // established recourse the L01 impact case already relies on (app.test.ts, events.spec.ts).
+  await page.evaluate(() => window.graviton!.warpToEvent());
+  state = await page.evaluate(() => window.graviton!.state());
+  expect(state.tick).toBeGreaterThan(T01_LAUNCH_TICK + 1);
+  expect(state.tick).toBeLessThanOrEqual(T01_IMPACT_ARRIVAL_TICK + 1);
+
+  await page.evaluate((t) => window.graviton!.warpTo(t), T01_IMPACT_ARRIVAL_TICK + 1);
+  const readouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(readouts['status.event']).toBe('IMPACT PRB-01 → RELAY-HULK');
 
   expect(gate.violations()).toEqual([]);
 });

@@ -79,6 +79,14 @@ actually happened at and the `arrivalTick` the post's own telemetry revealed it 
 drop and the status line fire at `arrivalTick`, timeline marks sit at `tick`. Closest approach is
 still a prediction, unaffected.
 
+Command horizon, locked nodes and amendments (GRV-0031, GAME-0001 §4.4/§4.6, ADR-0007 §2-3): key
+`N` (debug `amend(probe)`) opens a selected flying probe's plan for amendment -- existing nodes
+still ahead of the command horizon (`window.graviton.horizon()`) are shown, anything before it is
+locked (dimmed solid, hollow, no handles) and refused by both the planner and the simulation's own
+`checkBurn`; `commitPlan()` sends only the changed/added nodes. The timeline's own uplink
+availability band (`window.graviton.uplinkWindows()`) marks occlusion windows along the drafted or
+selected probe's predicted path.
+
 ## Proving a change
 
 `adr/2026-09-03-0004-headless-validation-and-evidence.md` is the decision;

@@ -5,8 +5,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { planToCommands, validatePlan } from './plan.ts';
-import type { FlightPlan } from './plan.ts';
+import { diffAmendmentNodes, existingNodesForProbe, planToCommands, validatePlan } from './plan.ts';
+import type { BurnNode, FlightPlan } from './plan.ts';
+import type { Command } from '../sim/sim.ts';
 import { createSim } from '../sim/sim.ts';
 import type { Scenario } from '../sim/sim.ts';
 import type { CompiledLevel } from '../levels/compile.ts';
@@ -164,5 +165,53 @@ describe('planToCommands', () => {
     );
     expect(commands[0]!.kind).toBe('launch');
     expect(commands[1]!.kind).toBe('burn');
+  });
+});
+
+describe('existingNodesForProbe', () => {
+  test('collects every burn command for one probe, sorted by atTick, ignoring other probes and launches', () => {
+    const log: Command[] = [
+      { tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 1 },
+      { tick: 10, kind: 'burn', probe: 1, atTick: 200, prograde: 9, lateral: 0 }, // a different probe
+      { tick: 0, kind: 'burn', probe: 0, atTick: 300, prograde: 5, lateral: 1 },
+      { tick: 0, kind: 'burn', probe: 0, atTick: 100, prograde: 2, lateral: 0 },
+    ];
+    expect(existingNodesForProbe({ log, probe: 0 })).toEqual([
+      { atTick: 100, prograde: 2, lateral: 0 },
+      { atTick: 300, prograde: 5, lateral: 1 },
+    ]);
+  });
+
+  test('a probe with no burn commands yet has no existing nodes', () => {
+    const log: Command[] = [{ tick: 0, kind: 'launch', rail: 0, heading: 0, speed: 1 }];
+    expect(existingNodesForProbe({ log, probe: 0 })).toEqual([]);
+  });
+});
+
+describe('diffAmendmentNodes', () => {
+  const existing: BurnNode[] = [
+    { atTick: 100, prograde: 2, lateral: 0 },
+    { atTick: 500, prograde: 5, lateral: 1 },
+  ];
+
+  test('an unedited node list has nothing to issue', () => {
+    expect(diffAmendmentNodes({ existing, nodes: existing.map((n) => ({ ...n })) })).toEqual([]);
+  });
+
+  test('a brand-new node (beyond the existing list) is issued', () => {
+    const added: BurnNode = { atTick: 900, prograde: 7, lateral: -1 };
+    const nodes = [...existing, added];
+    expect(diffAmendmentNodes({ existing, nodes })).toEqual([added]);
+  });
+
+  test('an edited existing node (any field changed) is issued again', () => {
+    const edited: BurnNode = { atTick: 500, prograde: 6, lateral: 1 };
+    const nodes = [existing[0]!, edited];
+    expect(diffAmendmentNodes({ existing, nodes })).toEqual([edited]);
+  });
+
+  test('a locked node dropped from the current list is simply not re-issued (never a cancellation)', () => {
+    const nodes = [existing[1]!];
+    expect(diffAmendmentNodes({ existing, nodes })).toEqual([]);
   });
 });

@@ -95,11 +95,19 @@ function renderSelectionAndTimeline(): void {
       railName: (plan && app.frame().rails[plan.rail]?.name) || '',
       dt,
       issues: app.planIssues(),
+      mode: app.mode(),
+      commandHorizon: app.commandHorizon(),
     });
     renderSolution(solutionPanel, { readout: app.planSolution(), dt });
   }
   const timeline = app.timelineData();
-  if (timeline) renderTimeline(timelineStrip, timeline);
+  if (timeline) {
+    renderTimeline(timelineStrip, {
+      ...timeline,
+      uplinkWindows: showingError ? [] : app.uplinkWindows(),
+      dt: showingError ? undefined : app.frame().dt,
+    });
+  }
 }
 
 // `onChange` references `plotController`, declared below -- fine, since `onChange` only ever
@@ -154,12 +162,18 @@ function getPlannerFrame(): PlannerFrame | null {
     const rail = app.frame().rails[plan.rail];
     if (rail) launchOrigin = { x: rail.x, y: rail.y };
   }
+  const horizon = app.commandHorizon();
   return buildPlannerFrame({
     plan,
     ghost: app.ghost(),
     selectedNode: app.selectedNode(),
     launchOrigin,
     view: plotController.getView(),
+    commandHorizon: horizon && {
+      commandHorizonTick: horizon.commandHorizonTick,
+      locks: app.mode() === 'amend',
+    },
+    dt: app.frame().dt,
   });
 }
 
@@ -330,6 +344,12 @@ window.addEventListener('keydown', (event) => {
     if (app.plan() && app.planIssues().length === 0) app.commitPlan();
   } else if (event.key === 'Escape') {
     if (app.plan()) app.discardDraft();
+  } else if (event.key === 'n' || event.key === 'N') {
+    // Amendment mode (GRV-0031, GAME-0001 §4.4): a selected flying probe only -- beginAmend()
+    // itself is the no-op guard (never launched, or no observation yet), this just picks the
+    // selection apart.
+    const selection = app.selection();
+    if (selection?.kind === 'probe') app.beginAmend(selection.index);
   }
 });
 
@@ -395,5 +415,8 @@ const driver: DebugApiDriver = {
   planSolution: () => app.planSolution(),
   observed: (index) => app.observed(index),
   delay: (selection) => app.delay(selection),
+  beginAmend: (probe) => app.beginAmend(probe),
+  commandHorizon: () => app.commandHorizon(),
+  uplinkWindows: () => app.uplinkWindows(),
 };
 installDebugApi(driver);

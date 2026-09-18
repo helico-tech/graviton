@@ -49,8 +49,12 @@ test('warpToEvent() drops to launch, then to impact, at the evidence file’s ow
 
   // The design note allows either a closest approach or an impact next; this solution is a direct
   // intercept (no flyby before the hit), so the real next drop is straight to the *predicted*
-  // impact tick (nextEventTick's own prediction, src/app/predict.ts, unaffected by GRV-0030) --
-  // looping (bounded) keeps the test honest about that rather than assuming it.
+  // impact tick (nextEventTick's own prediction, src/app/predict.ts) -- looping (bounded) keeps
+  // the test honest about that rather than assuming it. GRV-0031: the prediction now targets its
+  // own downlink-confirmed tick (`downlinkArrivalOf`), one tick later than the bare true impact
+  // tick for this probe (predict.test.ts's own L01_IMPACT_ARRIVAL_TICK, 3299) -- landing one past
+  // *that*, not past the true tick itself.
+  const L01_IMPACT_ARRIVAL_TICK = 3299;
   let guard = 0;
   do {
     await page.evaluate(() => window.graviton!.warpToEvent());
@@ -58,9 +62,9 @@ test('warpToEvent() drops to launch, then to impact, at the evidence file’s ow
     state = await page.evaluate(() => window.graviton!.state());
     expect(readouts['status.warp']).toBe('1x'); // every drop lands at 1x, never anything else
     guard++;
-  } while (state.tick <= L01_IMPACT_TICK && guard < 5);
+  } while (state.tick <= L01_IMPACT_ARRIVAL_TICK && guard < 5);
 
-  expect(state.tick).toBe(L01_IMPACT_TICK + 1);
+  expect(state.tick).toBe(L01_IMPACT_ARRIVAL_TICK + 1);
   expect(l01Evidence.contacts[0]!.impactTick).toBe(L01_IMPACT_TICK); // cross-check the fixture itself
 
   // GRV-0030: the impact itself is still at L01_IMPACT_TICK (unchanged physics), but its

@@ -5,6 +5,65 @@
 // this strip's right end and collided with the cursor label there (docs/issues/2026-09-18-
 // timeline-label-collides-with-build-tag.md); it moved to the status bar (GRV-0024), so this strip
 // keeps only its own content.
+//
+// Uplink availability band (GRV-0031, GAME-0001 §4.6 "occlusion windows along the plan, predicted
+// from the ephemeris, drawn on the timeline"): `computeUplinkWindows` is the pure geometry --
+// `segmentBlocked` (sim/lightcone.ts) against the post and a predicted path, one tick at a time --
+// `renderUplinkBand` draws its own result as a dim strip along the axis, with a `timeline.uplink`
+// text twin (GAME-0002 §11 "every reading on the plot is also available as text"). `src/ui`
+// importing `src/sim` directly is an established pattern here already (this file's own `Sim`
+// import, src/ui/planner.ts's `HEADING_TURN`) -- `segmentBlocked` needs the real thing, and a live
+// `Sim` reaching main.ts (the only caller) still comes from debug-api.ts's own new session method,
+// never held outside it (mirrors captureFrame's boundary -- app.ts never touches `Sim` directly).
+import { segmentBlocked } from '../sim/lightcone.ts';
+import { postPositionAtTime } from '../sim/post.ts';
+import type { Sim } from '../sim/sim.ts';
+import { formatSimTime } from '../app/time.ts';
+
+export interface UplinkWindow {
+  readonly startTick: number;
+  readonly endTick: number;
+}
+
+/** Occlusion windows along `path` (GRV-0031): `segmentBlocked` between the post's own position and
+ *  each sample, one call per tick -- a single-snapshot check, matching `segmentBlocked`'s own
+ *  contract (both endpoints evaluated at the same instant, never the signal's own separate emission/
+ *  reception times, module header of lightcone.ts). Consecutive blocked ticks merge into one
+ *  window; `path` need not start at tick 0 or be contiguous from there, only internally
+ *  tick-ordered (the drafted/amended ghost's own samples, or `predictProbePath`'s). */
+export function computeUplinkWindows({
+  sim,
+  path,
+}: {
+  sim: Sim;
+  path: readonly { tick: number; x: number; y: number }[];
+}): UplinkWindow[] {
+  const windows: UplinkWindow[] = [];
+  let openAt: number | null = null;
+  let lastTick: number | null = null;
+
+  for (const point of path) {
+    const post = postPositionAtTime({ sim, t: point.tick * sim.scenario.dt });
+    const blocked = segmentBlocked({
+      sim,
+      ax: post.x,
+      ay: post.y,
+      bx: point.x,
+      by: point.y,
+      tick: point.tick,
+    });
+    if (blocked && openAt === null) openAt = point.tick;
+    else if (!blocked && openAt !== null) {
+      windows.push({ startTick: openAt, endTick: lastTick! });
+      openAt = null;
+    }
+    lastTick = point.tick;
+  }
+  if (openAt !== null) windows.push({ startTick: openAt, endTick: lastTick! });
+
+  return windows;
+}
+
 export interface TimelineRefs {
   element: HTMLElement;
   axis: HTMLElement;
@@ -65,22 +124,61 @@ function markElement({
   return el;
 }
 
+/** Uplink windows as dim bands along the axis (GRV-0031, GAME-0001 §4.6), plus their own
+ *  `timeline.uplink` text twin (GAME-0002 §11) -- one `BLOCKED T+… – T+…` entry per window,
+ *  `—` when the path is entirely clear. Built into `renderTimeline`'s own single pass (below)
+ *  rather than a separate call, since that function rebuilds the whole axis from scratch every
+ *  render (`replaceChildren`) and would otherwise wipe out a band appended by an earlier call. */
+function appendUplinkBand(
+  refs: TimelineRefs,
+  { windows, rangeTicks, dt }: { windows: readonly UplinkWindow[]; rangeTicks: number; dt: number },
+): void {
+  for (const w of windows) {
+    const band = document.createElement('div');
+    band.className = 'timeline-uplink-band';
+    const left = markFraction({ tick: w.startTick, rangeTicks }) * 100;
+    const right = markFraction({ tick: w.endTick, rangeTicks }) * 100;
+    band.style.left = `${left}%`;
+    band.style.width = `${Math.max(0, right - left)}%`;
+    refs.axis.append(band);
+  }
+  const readout = document.createElement('span');
+  readout.className = 'timeline-uplink-readout';
+  readout.dataset.readout = 'timeline.uplink';
+  readout.textContent =
+    windows.length === 0
+      ? '—'
+      : windows
+          .map(
+            (w) =>
+              `BLOCKED ${formatSimTime({ tick: w.startTick, dt })} – ${formatSimTime({ tick: w.endTick, dt })}`,
+          )
+          .join(', ');
+  refs.axis.append(readout);
+}
+
 export function renderTimeline(
   refs: TimelineRefs,
   {
     marks,
     cursor,
     rangeTicks,
+    uplinkWindows,
+    dt,
   }: {
     marks: readonly TimelineMark[];
     cursor: { tick: number; label: string };
     rangeTicks: number;
+    /** GRV-0031's own uplink availability band -- `[]`/omitted draws none, just the `—` readout. */
+    uplinkWindows?: readonly UplinkWindow[];
+    dt?: number;
   },
 ): void {
   refs.axis.replaceChildren();
   const line = document.createElement('div');
   line.className = 'timeline-line';
   refs.axis.append(line);
+  appendUplinkBand(refs, { windows: uplinkWindows ?? [], rangeTicks, dt: dt ?? 1 });
   for (const mark of marks) {
     refs.axis.append(
       markElement({

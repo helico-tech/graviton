@@ -13,7 +13,15 @@ const CANVAS_WIDTH = 640;
 const CANVAS_HEIGHT = 360;
 
 function frameWithEvents(events: PlannerFrame['events']): PlannerFrame {
-  return { path: [], nodes: [], handle: null, events, launchVector: null };
+  return {
+    path: [],
+    nodes: [],
+    handle: null,
+    events,
+    launchVector: null,
+    lockedUntilTick: null,
+    commandHorizonMark: null,
+  };
 }
 
 function labelsFor(events: PlannerFrame['events']): { x: number; y: number; text: string }[] {
