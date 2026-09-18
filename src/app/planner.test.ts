@@ -19,6 +19,7 @@ import {
   updateNodeDrag,
 } from './planner.ts';
 import type { PlannerState } from './planner.ts';
+import { getLevel } from './levels.ts';
 import type { CompiledLevel } from './levels.ts';
 import type { Command } from '../sim/sim.ts';
 import type { FlightPlan } from '../planner/plan.ts';
@@ -80,7 +81,7 @@ describe('createPlannerState', () => {
       ghost: null,
       cache: undefined,
       selectedNode: null,
-      launchRejection: null,
+      issues: [],
     });
   });
 });
@@ -232,7 +233,7 @@ describe('reintegrate: launch-tick snapping and the ghost invariant', () => {
     state = reintegrate({ state, level: lvl, log, nowTick: 0, horizonTick: 200 });
     expect(state.draft!.launchTick).toBe(5);
     expect(state.ghost).not.toBeNull();
-    expect(state.launchRejection).toBeNull();
+    expect(state.issues).toEqual([]);
   });
 
   test('a plan whose launch tick has passed snaps to nowTick + 1', () => {
@@ -257,7 +258,7 @@ describe('reintegrate: launch-tick snapping and the ghost invariant', () => {
     });
     state = reintegrate({ state, level: lvl, log, nowTick: 0, horizonTick: 200 });
     expect(state.ghost).toBeNull();
-    expect(state.launchRejection).toBe('cone');
+    expect(state.issues).toEqual(['launch rejected: cone']);
   });
 
   test('a null draft reintegrates to a null ghost', () => {
@@ -269,7 +270,7 @@ describe('reintegrate: launch-tick snapping and the ghost invariant', () => {
       horizonTick: 200,
     });
     expect(state.ghost).toBeNull();
-    expect(state.launchRejection).toBeNull();
+    expect(state.issues).toEqual([]);
   });
 
   test('cache reuse: an unrelated second reintegrate of the same plan does no further work', () => {
@@ -301,6 +302,59 @@ describe('reintegrate: launch-tick snapping and the ghost invariant', () => {
 
     expect(state.ghost!.ticksIntegrated).toBeGreaterThan(0);
     expect(state.ghost!.ticksIntegrated).toBeLessThan(fullRun);
+  });
+
+  test('a draft over the level node budget yields issues and no ghost, never throws (docs/issues/2026-09-18-reintegrate-skips-validate-plan.md)', () => {
+    // L01-intercept's own scenario has burnNodeCapacity 0 (capacity 2 -> nodeBudget 0): the exact
+    // level the filed bug reproduced against ("pending burn queue capacity 0 exceeded").
+    const l01 = getLevel('L01-intercept')!;
+    const rail = l01.scenario.rails[0]!;
+    let state = createPlannerState();
+    state = setPlan({
+      state,
+      plan: {
+        rail: 0,
+        launchTick: 1,
+        heading: 0,
+        speed: rail.muzzleSpeedMin * 1000,
+        nodes: [{ atTick: 100, prograde: 1, lateral: 0 }],
+      },
+    });
+
+    expect(() => {
+      state = reintegrate({ state, level: l01, log: [], nowTick: 0, horizonTick: 200 });
+    }).not.toThrow();
+
+    expect(state.ghost).toBeNull();
+    expect(state.issues).toEqual(['plan has 1 node(s), budget is 0']);
+  });
+
+  test('re-dragging the launch past an existing node reports it as an issue instead of silently dropping it (docs/issues/2026-09-18-reintegrate-skips-validate-plan.md)', () => {
+    let state = createPlannerState();
+    state = setPlan({
+      state,
+      plan: { ...eastPlan(), nodes: [{ atTick: 50, prograde: 100, lateral: 0 }] },
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: 0, horizonTick: 200 });
+    expect(state.ghost).not.toBeNull();
+    expect(state.issues).toEqual([]);
+
+    // Time passes tick 100, well past the node's own atTick (50); re-dragging the launch snaps it
+    // to tick 101, past the node.
+    state = beginLaunchDrag({ state, rail: 0, worldX: RADIUS, worldY: 0 });
+    state = updateLaunchDrag({
+      state,
+      level: lvl,
+      worldX: RADIUS + 80,
+      worldY: 0,
+      tick: 100,
+      metresPerPixel: 1,
+    });
+    state = reintegrate({ state, level: lvl, log, nowTick: 100, horizonTick: 200 });
+
+    expect(state.draft!.launchTick).toBe(101);
+    expect(state.ghost).toBeNull();
+    expect(state.issues).toEqual(['node 0: atTick (50) must be later than launchTick (101)']);
   });
 });
 
@@ -448,7 +502,7 @@ describe('setHorizon and discardDraft', () => {
       ghost: null,
       cache: undefined,
       selectedNode: null,
-      launchRejection: null,
+      issues: [],
     });
   });
 });

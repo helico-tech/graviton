@@ -27,6 +27,11 @@ const EVENT_MARKER_RADIUS_PX = 4;
 const EVENT_TICK_LENGTH_PX = 6;
 const LABEL_FONT = `10px "${MONO_FONT_FAMILY}"`;
 const LABEL_OFFSET_PX = 6;
+/** GRV-0028, docs/issues/2026-09-18-plot-event-labels-overlap-at-impact.md: on a direct hit the
+ *  closest-approach and impact marks land on (near enough) the same pixel, and their labels used
+ *  to render as one garbled string ("impac t118 km") -- a closest-approach label this close to an
+ *  impact for the *same* contact is dropped instead (`plannerLabels`, below). */
+const LABEL_SUPPRESS_RADIUS_PX = 8;
 
 export interface GhostPathPoint {
   readonly x: number;
@@ -58,6 +63,10 @@ export interface GhostEventMark {
   readonly y: number;
   readonly kind: 'closestApproach' | 'impact' | 'bodyHit';
   readonly label: string;
+  /** The contact this event concerns (`closestApproach`/`impact` only) -- lets `plannerLabels`
+   *  (below) match a closest-approach label to the impact that supersedes it, GRV-0028.
+   *  `undefined` for `bodyHit`, which has no contact. */
+  readonly contact?: number;
 }
 
 export interface LaunchVectorPreview {
@@ -155,10 +164,18 @@ function ghostEvents(ghost: Ghost): GhostEventMark[] {
           y: sample.y,
           kind: 'closestApproach',
           label: `miss ${formatMetres(event.distance)}`,
+          contact: event.contact,
         });
     } else if (event.kind === 'impact') {
       const sample = sampleAt(ghost, event.tick);
-      if (sample) marks.push({ x: sample.x, y: sample.y, kind: 'impact', label: 'impact' });
+      if (sample)
+        marks.push({
+          x: sample.x,
+          y: sample.y,
+          kind: 'impact',
+          label: 'impact',
+          contact: event.contact,
+        });
     } else if (event.kind === 'bodyHit') {
       const sample = sampleAt(ghost, event.tick);
       if (sample) marks.push({ x: sample.x, y: sample.y, kind: 'bodyHit', label: 'body hit' });
@@ -226,6 +243,51 @@ function project(
   y: number,
 ): { x: number; y: number } {
   return worldToScreen({ view, canvasWidth, canvasHeight, x, y });
+}
+
+export interface PlannerLabel {
+  readonly x: number;
+  readonly y: number;
+  readonly text: string;
+}
+
+/** Every event mark's screen-space label position and text (GRV-0028, docs/issues/2026-09-18-
+ *  plot-event-labels-overlap-at-impact.md), with a closest-approach label dropped when an impact
+ *  for the *same contact* lands within `LABEL_SUPPRESS_RADIUS_PX` of it: on a direct hit the two
+ *  marks land on (near enough) the same pixel, and their labels would otherwise render as one
+ *  garbled string. Pure over `frame` + `view` + the canvas size, so a test can call it directly
+ *  without rasterising text (tests/render/plot.test.ts's own convention for pixel assertions
+ *  doesn't apply here -- there is nothing to sample). `drawEvents` (below) still draws every
+ *  mark's own glyph regardless -- only the *text* is suppressed, not the tick mark/diamond/cross
+ *  itself. */
+export function plannerLabels({
+  frame,
+  view,
+  canvasWidth,
+  canvasHeight,
+}: {
+  frame: PlannerFrame;
+  view: View;
+  canvasWidth: number;
+  canvasHeight: number;
+}): PlannerLabel[] {
+  const screens = frame.events.map((event) =>
+    project(view, canvasWidth, canvasHeight, event.x, event.y),
+  );
+
+  const suppressed = frame.events.map((event, index) => {
+    if (event.kind !== 'closestApproach') return false;
+    const own = screens[index]!;
+    return frame.events.some((other, otherIndex) => {
+      if (other.kind !== 'impact' || other.contact !== event.contact) return false;
+      const otherScreen = screens[otherIndex]!;
+      return Math.hypot(otherScreen.x - own.x, otherScreen.y - own.y) <= LABEL_SUPPRESS_RADIUS_PX;
+    });
+  });
+
+  return frame.events
+    .map((event, index) => ({ x: screens[index]!.x, y: screens[index]!.y, text: event.label }))
+    .filter((_, index) => !suppressed[index]);
 }
 
 function drawPath(
@@ -325,9 +387,10 @@ function drawLabel(ctx: Ctx2D, { x, y, text }: { x: number; y: number; text: str
   ctx.fillText(text, x + LABEL_OFFSET_PX, y - LABEL_OFFSET_PX);
 }
 
-/** Closest-approach tick mark, impact (confirmed-good) and body-hit (alarm) markers (design note),
- *  each with its own label drawn beside it. */
-function drawEvents(
+/** Closest-approach tick mark, impact (confirmed-good) and body-hit (alarm) markers (design note)
+ *  -- every mark, whether or not its label is suppressed (`plannerLabels` still owns which labels
+ *  actually draw, below); this thin consumer just projects and draws the glyphs. */
+function drawEventMarkers(
   ctx: Ctx2D,
   {
     events,
@@ -374,7 +437,23 @@ function drawEvents(
       ctx.lineTo(p.x + EVENT_MARKER_RADIUS_PX, p.y - EVENT_MARKER_RADIUS_PX);
       ctx.stroke();
     }
-    drawLabel(ctx, { x: p.x, y: p.y, text: event.label });
+  }
+}
+
+/** Every event's own marker, then every *unsuppressed* label (`plannerLabels`, GRV-0028) --
+ *  suppressing only the text keeps every mark itself visible even where two coincide. */
+function drawEvents(
+  ctx: Ctx2D,
+  {
+    frame,
+    view,
+    canvasWidth,
+    canvasHeight,
+  }: { frame: PlannerFrame; view: View; canvasWidth: number; canvasHeight: number },
+): void {
+  drawEventMarkers(ctx, { events: frame.events, view, canvasWidth, canvasHeight });
+  for (const label of plannerLabels({ frame, view, canvasWidth, canvasHeight })) {
+    drawLabel(ctx, label);
   }
 }
 
@@ -423,6 +502,6 @@ export function drawPlannerFrame(
   drawPath(ctx, { path: frame.path, view, canvasWidth, canvasHeight });
   drawNodes(ctx, { nodes: frame.nodes, view, canvasWidth, canvasHeight });
   drawHandle(ctx, { handle: frame.handle, view, canvasWidth, canvasHeight });
-  drawEvents(ctx, { events: frame.events, view, canvasWidth, canvasHeight });
+  drawEvents(ctx, { frame, view, canvasWidth, canvasHeight });
   drawLaunchVector(ctx, { vector: frame.launchVector, view, canvasWidth, canvasHeight });
 }

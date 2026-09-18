@@ -14,6 +14,7 @@ import type { EphemerisOut } from '../sim/ephemeris/bodies.ts';
 import { createRailTable, railGeometry } from '../sim/rails.ts';
 import { integrateGhost } from '../planner/ghost.ts';
 import type { Ghost, GhostCache } from '../planner/ghost.ts';
+import { validatePlan } from '../planner/plan.ts';
 import type { BurnNode, FlightPlan } from '../planner/plan.ts';
 import { quantizeHeading, quantizeSpeed } from '../levels/solve.ts';
 import type { CompiledLevel } from './levels.ts';
@@ -85,12 +86,17 @@ export interface PlannerState {
    *  a selection that outlives the drag gesture itself -- flagged in the unit's evidence rather
    *  than folded in silently. */
   readonly selectedNode: number | null;
-  /** From `checkLaunch` (sim/commands.ts) against the draft's own rail/heading/speed -- capacity,
-   *  reload, band or cone -- computed by `reintegrate` alongside the ghost so the PLAN panel can
-   *  show why a launch is currently infeasible without re-deriving it itself (determinism rule 11:
-   *  every displayed number originates in the simulation, not a second model). `null` when there
-   *  is no draft or the launch is currently feasible. */
-  readonly launchRejection: LaunchRejection | null;
+  /** Every reason the draft currently integrates to no ghost, computed by `reintegrate` alongside
+   *  the (possibly null) ghost so the PLAN panel can show why without re-deriving anything itself
+   *  (determinism rule 11: every displayed number originates in the simulation, not a second
+   *  model): `validatePlan`'s own shape issues (node budget, sortedness, integer-ness, a node
+   *  whose `atTick` no longer clears the -- possibly just re-snapped -- launch tick) checked
+   *  first, generalising the design note's "outside the cone or band the ghost is not drawn and
+   *  the reason is shown" to cover a malformed plan the same way (GRV-0028, docs/issues/2026-09-
+   *  18-reintegrate-skips-validate-plan.md); or, if the shape is fine, a single human-readable
+   *  line naming `checkLaunch`'s own rejection (capacity, reload, band, cone). Empty exactly when
+   *  the draft is valid and its ghost is current. */
+  readonly issues: readonly string[];
 }
 
 export function createPlannerState(): PlannerState {
@@ -101,7 +107,7 @@ export function createPlannerState(): PlannerState {
     ghost: null,
     cache: undefined,
     selectedNode: null,
-    launchRejection: null,
+    issues: [],
   };
 }
 
@@ -134,7 +140,7 @@ export function discardDraft(state: PlannerState): PlannerState {
     ghost: null,
     cache: undefined,
     selectedNode: null,
-    launchRejection: null,
+    issues: [],
   };
 }
 
@@ -427,14 +433,22 @@ function checkPlanLaunch({
 /** Re-integrates the ghost from the draft (GAME-0001 §4.6, determinism contract's "Ghost
  *  invariant"): if the sim's clock has reached or passed the draft's own launch tick, the launch
  *  snaps to the next tick first ("the plan can only launch in the future") -- everything
- *  downstream reads the snapped draft, never the stale one. A rejected launch (capacity, reload,
- *  band or cone -- checkLaunch, sim/commands.ts) skips integration entirely: the ghost is not
- *  drawn and the reason is carried on `launchRejection` instead, matching the design note's own
- *  "outside the cone or band the ghost is not drawn and the reason is shown". Caching
- *  (src/planner/ghost.ts's GhostCache) is threaded through `state.cache`, so an unrelated node
- *  edit resumes from the earliest one that actually changed rather than recomputing the whole
- *  flight. The UI layer debounces calls to this to once per animation frame (design note); this
- *  function itself is synchronous and does no debouncing of its own. */
+ *  downstream, including validation, reads the snapped draft, never the stale one.
+ *
+ *  Two checks gate integration, in order (GRV-0028, docs/issues/2026-09-18-reintegrate-skips-
+ *  validate-plan.md): `validatePlan` (plan.ts) first -- a plan shape the simulation itself would
+ *  reject outright (over the node budget, a node no longer later than the -- possibly just
+ *  snapped -- launch tick) never reaches `integrateGhost` at all, which is what let a too-large
+ *  plan throw from inside the sim's own burn queue and let a re-drag past a node integrate a
+ *  ghost that silently ignored it. Only once the shape is clean does `checkLaunch` (capacity,
+ *  reload, band or cone -- sim/commands.ts) get a turn. Either way, a rejection skips integration
+ *  entirely: the ghost is not drawn and the reason is carried on `issues` instead, matching the
+ *  design note's own "outside the cone or band the ghost is not drawn and the reason is shown",
+ *  generalised to cover a malformed plan the same way. Caching (src/planner/ghost.ts's
+ *  GhostCache) is threaded through `state.cache`, so an unrelated node edit resumes from the
+ *  earliest one that actually changed rather than recomputing the whole flight. The UI layer
+ *  debounces calls to this to once per animation frame (design note); this function itself is
+ *  synchronous and does no debouncing of its own. */
 export function reintegrate({
   state,
   level,
@@ -448,15 +462,26 @@ export function reintegrate({
   nowTick: number;
   horizonTick: number;
 }): PlannerState {
-  if (!state.draft) return { ...state, ghost: null, cache: undefined, launchRejection: null };
+  if (!state.draft) return { ...state, ghost: null, cache: undefined, issues: [] };
 
   const launchTick = nowTick >= state.draft.launchTick ? nowTick + 1 : state.draft.launchTick;
   const draft: FlightPlan =
     launchTick === state.draft.launchTick ? state.draft : { ...state.draft, launchTick };
 
+  const shapeIssues = validatePlan({ plan: draft, level });
+  if (shapeIssues.length > 0) {
+    return { ...state, draft, ghost: null, cache: undefined, issues: shapeIssues };
+  }
+
   const launchRejection = checkPlanLaunch({ level, log, plan: draft });
   if (launchRejection !== null) {
-    return { ...state, draft, ghost: null, cache: undefined, launchRejection };
+    return {
+      ...state,
+      draft,
+      ghost: null,
+      cache: undefined,
+      issues: [`launch rejected: ${launchRejection}`],
+    };
   }
 
   const { ghost, cache } = integrateGhost({
@@ -467,5 +492,5 @@ export function reintegrate({
     horizonTick,
     cache: state.cache,
   });
-  return { ...state, draft, ghost, cache, launchRejection: null };
+  return { ...state, draft, ghost, cache, issues: [] };
 }
