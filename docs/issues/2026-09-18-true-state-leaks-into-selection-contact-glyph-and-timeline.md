@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -19,3 +19,5 @@ loop) and `src/app/app.ts` (`timelineData`). `selection.test.ts` encodes the lea
 Violates ADR-0007 §6 and GRV-0030's own "the true state is never drawn".
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0032, commit a857217. confirmedContactState/confirmedProbeState (src/app/confirmed.ts) are now the one shared source describeContact/describeProbe, captureFrame's contacts loop and timelineData all read; a static guard (src/app/premise.test.ts) asserts sim.contactState/sim.objects are read nowhere outside the observed-view boundary. See docs/evidence/GRV-0032/README.md.
