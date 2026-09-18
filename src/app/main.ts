@@ -20,15 +20,28 @@ import {
   showPlotError,
 } from '../ui/plot.ts';
 import type { PlotController } from '../ui/plot.ts';
+import { createPlannerPanel, renderPlanner } from '../ui/planner.ts';
 import { createSelectionPanel, renderSelection } from '../ui/selection.ts';
+import { createSolutionPanel, renderSolution } from '../ui/solution.ts';
 import { createStatusBar, renderStatus } from '../ui/status.ts';
-import { createTimelineStrip, renderTimeline } from '../ui/timeline.ts';
+import { attachTimelineScrub, createTimelineStrip, renderTimeline } from '../ui/timeline.ts';
+import { buildPlannerFrame } from '../render/ghost.ts';
+import type { PlannerFrame } from '../render/ghost.ts';
 
 declare const __BUILD_SHA__: string;
 
 // Generous relative to the ~4-8 px markers themselves (GRV-0022's marker radii): a click needs to
 // land near a thing, not exactly on its centre pixel.
 const SELECT_RADIUS_PX = 12;
+
+// Planner pick radii (GRV-0026 design note): a rail marker and a ghost node both get the same
+// generous radius selection already uses; a handle's own grab target is slightly smaller (it sits
+// right next to its node, GRV-0022's marker-radii reasoning again); the ghost path itself uses the
+// design note's own literal "within 4 px".
+const RAIL_DRAG_PICK_RADIUS_PX = 12;
+const NODE_PICK_RADIUS_PX = 8;
+const HANDLE_PICK_RADIUS_PX = 8;
+const PATH_PICK_RADIUS_PX = 4;
 
 const params = new URLSearchParams(window.location.search);
 const debug = params.get('debug') === '1';
@@ -51,8 +64,18 @@ root.className = 'shell';
 const status = createStatusBar({ buildSha: __BUILD_SHA__ });
 const plot = createPlotRegion();
 const selectionPanel = createSelectionPanel();
+const plannerPanel = createPlannerPanel();
+const solutionPanel = createSolutionPanel();
 const timelineStrip = createTimelineStrip();
-root.append(status.element, plot.element, selectionPanel.element, timelineStrip.element);
+
+// SELECTION, PLAN and SOLUTION all stack in the shell's right column (GAME-0002 §8's own mockup
+// order); `.right-column` alone carries `grid-area: selection`, so the three panels themselves
+// stay plain, unpositioned blocks (src/app/styles.css).
+const rightColumn = document.createElement('div');
+rightColumn.className = 'right-column';
+rightColumn.append(selectionPanel.element, plannerPanel.element, solutionPanel.element);
+
+root.append(status.element, plot.element, rightColumn, timelineStrip.element);
 
 let showingError = false;
 
@@ -62,6 +85,19 @@ function renderSelectionAndTimeline(): void {
     name: app.selectionName(),
     rows: app.selectionReadouts(),
   });
+  // app.frame() throws with nothing loaded (the unknown-level error state, shell.spec.ts) -- the
+  // PLAN/SOLUTION panels have nothing to show there anyway, same as the plot itself.
+  if (!showingError) {
+    const plan = app.plan();
+    const dt = app.frame().dt; // Frame.dt is the level's own scenario.dt, no separate App getter
+    renderPlanner(plannerPanel, {
+      plan,
+      railName: (plan && app.frame().rails[plan.rail]?.name) || '',
+      dt,
+      issues: app.planIssues(),
+    });
+    renderSolution(solutionPanel, { readout: app.planSolution(), dt });
+  }
   const timeline = app.timelineData();
   if (timeline) renderTimeline(timelineStrip, timeline);
 }
@@ -103,14 +139,114 @@ function onCanvasSelect({ screenX, screenY }: { screenX: number; screenY: number
   app.select(result);
 }
 
+plannerPanel.commit.addEventListener('click', () => app.commitPlan());
+plannerPanel.discard.addEventListener('click', () => app.discardDraft());
+
+// The planner overlay's own render data (src/render/ghost.ts), rebuilt on demand from the app's
+// plan/ghost/selection state -- read both by plotController's render() (below) and by the
+// pointer-down hit test, so the two never see different geometry for the same frame.
+function getPlannerFrame(): PlannerFrame | null {
+  const plan = app.plan();
+  if (!plan) return null;
+  const drag = app.drag();
+  let launchOrigin: { x: number; y: number } | null = null;
+  if (drag?.kind === 'launch') {
+    const rail = app.frame().rails[plan.rail];
+    if (rail) launchOrigin = { x: rail.x, y: rail.y };
+  }
+  return buildPlannerFrame({
+    plan,
+    ghost: app.ghost(),
+    selectedNode: app.selectedNode(),
+    launchOrigin,
+    view: plotController.getView(),
+  });
+}
+
+// Priority order mirrors the design note literally: a selected node's own handle first (the most
+// specific target), then a rail marker (always starts a launch drag -- rails are no longer
+// selectable by click once the planner overlay is live), then any ghost node, then the ghost path
+// itself; falling through to `false` lets plot.ts run its ordinary select-or-pan flow.
+function onPlannerPointerDown({ worldX, worldY }: { worldX: number; worldY: number }): boolean {
+  const metresPerPixel = plotController.getView().metresPerPixel;
+  const worldRadius = (px: number): number => px * metresPerPixel;
+  const within = (x: number, y: number, px: number): boolean =>
+    Math.hypot(worldX - x, worldY - y) <= worldRadius(px);
+
+  const frame = getPlannerFrame();
+  const selected = app.selectedNode();
+  if (frame?.handle && selected !== null) {
+    const handle = frame.handle;
+    if (within(handle.progradeX, handle.progradeY, HANDLE_PICK_RADIUS_PX)) {
+      app.beginNodeDrag({ index: selected, handle: 'prograde', worldX, worldY });
+      return true;
+    }
+    if (within(handle.lateralX, handle.lateralY, HANDLE_PICK_RADIUS_PX)) {
+      app.beginNodeDrag({ index: selected, handle: 'lateral', worldX, worldY });
+      return true;
+    }
+  }
+
+  const rails = app.frame().rails;
+  for (let i = 0; i < rails.length; i++) {
+    const rail = rails[i]!;
+    if (within(rail.x, rail.y, RAIL_DRAG_PICK_RADIUS_PX)) {
+      app.beginLaunchDrag({ rail: i, worldX, worldY });
+      return true;
+    }
+  }
+
+  if (frame) {
+    for (const node of frame.nodes) {
+      if (within(node.x, node.y, NODE_PICK_RADIUS_PX)) {
+        app.selectNode(node.index);
+        app.beginNodeDrag({ index: node.index, handle: 'prograde', worldX, worldY });
+        return true;
+      }
+    }
+
+    let nearest: { distance: number; tick: number } | null = null;
+    for (const point of frame.path) {
+      const distance = Math.hypot(worldX - point.x, worldY - point.y);
+      if (nearest === null || distance < nearest.distance) nearest = { distance, tick: point.tick };
+    }
+    if (nearest && nearest.distance <= worldRadius(PATH_PICK_RADIUS_PX)) {
+      app.addNode({ tick: nearest.tick });
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function onPlannerPointerDrag({ worldX, worldY }: { worldX: number; worldY: number }): void {
+  const metresPerPixel = plotController.getView().metresPerPixel;
+  const drag = app.drag();
+  if (drag?.kind === 'launch') app.updateLaunchDrag({ worldX, worldY, metresPerPixel });
+  else if (drag?.kind === 'node') app.updateNodeDrag({ worldX, worldY, metresPerPixel });
+}
+
+function onPlannerPointerRelease(): void {
+  app.endDrag();
+}
+
 const plotController: PlotController = createPlotController({
   refs: plot,
   getFrame: () => app.frame(),
   getTrails: () => app.trails(),
   getSelection: () => app.selection(),
+  getPlanner: getPlannerFrame,
   onSelect: onCanvasSelect,
+  onPlannerDown: onPlannerPointerDown,
+  onPlannerDrag: onPlannerPointerDrag,
+  onPlannerRelease: onPlannerPointerRelease,
 });
 plotController.attachInput();
+attachTimelineScrub(timelineStrip, {
+  canScrub: () => app.warpRung() === 0,
+  rangeTicks: () => app.timelineData()?.rangeTicks ?? 1,
+  onScrub: (tick) => app.setHorizon(tick),
+});
 
 // ?w=&h= size the plot canvas directly rather than from its DOM box, so a shot is reproducible
 // independent of the browser window (ADR-0004 §1).
@@ -167,6 +303,13 @@ window.addEventListener('keydown', (event) => {
     changeWarp(() => app.stepWarpRung(-1));
   } else if (event.key === ']') {
     changeWarp(() => app.stepWarpRung(1));
+  } else if (event.key === 'Delete') {
+    const selected = app.selectedNode();
+    if (selected !== null) app.removeNode({ index: selected });
+  } else if (event.key === 'Enter') {
+    if (app.plan() && app.planIssues().length === 0) app.commitPlan();
+  } else if (event.key === 'Escape') {
+    if (app.plan()) app.discardDraft();
   }
 });
 
@@ -208,5 +351,10 @@ const driver: DebugApiDriver = {
   select: (sel) => app.select(sel),
   selection: () => app.selection(),
   loadSolution: () => app.loadSolution(),
+  plan: () => app.plan(),
+  setPlan: (plan) => app.setPlan(plan),
+  commitPlan: () => app.commitPlan(),
+  setHorizon: (tick) => app.setHorizon(tick),
+  planSolution: () => app.planSolution(),
 };
 installDebugApi(driver);

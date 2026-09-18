@@ -9,6 +9,7 @@ import {
   formatMetres,
   pan,
   pickScaleBar,
+  screenToWorld,
   zoomAt,
   zoomBounds,
 } from '../render/camera.ts';
@@ -17,6 +18,7 @@ import { hashCanvasPixels, renderPlot } from '../render/plot.ts';
 import type { PlotSelection } from '../render/plot.ts';
 import type { Frame } from '../render/frame.ts';
 import type { Ctx2D } from '../render/ctx2d.ts';
+import type { PlannerFrame } from '../render/ghost.ts';
 
 const GROUND = '#05070a';
 const ZOOM_SENSITIVITY = 0.001; // ~10% per wheel notch (deltaY ~= 100)
@@ -161,7 +163,11 @@ export function createPlotController({
   getFrame,
   getTrails,
   getSelection,
+  getPlanner,
   onSelect,
+  onPlannerDown,
+  onPlannerDrag,
+  onPlannerRelease,
 }: {
   refs: PlotRefs;
   getFrame: () => Frame;
@@ -169,10 +175,24 @@ export function createPlotController({
   /** The app's current selection (src/app/selection.ts), read fresh on every render -- the
    *  controller only ever draws the ring, it never picks or owns the selection itself. */
   getSelection?: () => PlotSelection | null;
+  /** The planner overlay (src/render/ghost.ts's `PlannerFrame`), read fresh on every render and
+   *  by the pointer-down hit test below -- like `getSelection`, this controller only ever draws
+   *  and hit-tests it, main.ts owns building it from `app.plan()`/`app.ghost()`. */
+  getPlanner?: () => PlannerFrame | null;
   /** Canvas-local, DPR-scaled screen coordinates of a click that wasn't a drag; `main.ts` turns
    *  this into a `pickAt` call plus `app.select(...)`, keeping `pickAt` itself out of `src/ui`
    *  (src/app depends on src/ui, never the reverse). */
   onSelect?: (args: { screenX: number; screenY: number }) => void;
+  /** World-space pointerdown hit test for the planner overlay (GRV-0026 design note: "pointer
+   *  down on a rail marker... starts a launch drag; on a ghost node starts a node drag; on the
+   *  ghost path... adds a node"). Returning `true` claims the whole gesture -- this controller's
+   *  own pan/select flow never starts for it -- mirroring `onSelect`'s own split: the hit-testing
+   *  and the `app.*` calls it makes both live in main.ts, this module only routes pointer events. */
+  onPlannerDown?: (args: { worldX: number; worldY: number }) => boolean;
+  /** Called on every pointermove while a planner gesture is claimed. */
+  onPlannerDrag?: (args: { worldX: number; worldY: number }) => void;
+  /** Called once when a claimed planner gesture ends (pointerup or pointercancel). */
+  onPlannerRelease?: () => void;
 }): PlotController {
   let view: View | null = null;
   let sizeOverride: { width: number; height: number } | null = null;
@@ -229,6 +249,7 @@ export function createPlotController({
       canvasWidth: refs.canvas.width,
       canvasHeight: refs.canvas.height,
       selection: getSelection?.() ?? null,
+      planner: getPlanner?.() ?? null,
     });
     updateReadouts(activeView);
   }
@@ -278,16 +299,49 @@ export function createPlotController({
       { passive: false },
     );
 
+    const worldAt = (event: PointerEvent): { x: number; y: number } => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = refs.canvas.getBoundingClientRect();
+      const screenX = (event.clientX - rect.left) * dpr;
+      const screenY = (event.clientY - rect.top) * dpr;
+      return screenToWorld({
+        view: view!,
+        canvasWidth: refs.canvas.width,
+        canvasHeight: refs.canvas.height,
+        x: screenX,
+        y: screenY,
+      });
+    };
+
     let dragFrom: { x: number; y: number } | null = null;
     let pointerDownAt: { x: number; y: number } | null = null;
+    let plannerClaimed = false;
+
     refs.canvas.addEventListener('pointerdown', (event) => {
       if (!view) return;
       refs.canvas.setPointerCapture(event.pointerId);
+
+      if (onPlannerDown) {
+        const world = worldAt(event);
+        if (onPlannerDown({ worldX: world.x, worldY: world.y })) {
+          plannerClaimed = true;
+          render();
+          return;
+        }
+      }
+
       dragFrom = { x: event.clientX, y: event.clientY };
       pointerDownAt = { x: event.clientX, y: event.clientY };
     });
     refs.canvas.addEventListener('pointermove', (event) => {
-      if (!view || !dragFrom) return;
+      if (!view) return;
+      if (plannerClaimed) {
+        const world = worldAt(event);
+        onPlannerDrag?.({ worldX: world.x, worldY: world.y });
+        render();
+        return;
+      }
+      if (!dragFrom) return;
       const dpr = window.devicePixelRatio || 1;
       const dxPixels = (event.clientX - dragFrom.x) * dpr;
       const dyPixels = (event.clientY - dragFrom.y) * dpr;
@@ -296,6 +350,12 @@ export function createPlotController({
       render();
     });
     refs.canvas.addEventListener('pointerup', (event) => {
+      if (plannerClaimed) {
+        plannerClaimed = false;
+        onPlannerRelease?.();
+        render();
+        return;
+      }
       if (onSelect && pointerDownAt) {
         const moved = Math.hypot(event.clientX - pointerDownAt.x, event.clientY - pointerDownAt.y);
         if (moved < CLICK_MOVEMENT_THRESHOLD_PX) {
@@ -311,6 +371,10 @@ export function createPlotController({
       pointerDownAt = null;
     });
     refs.canvas.addEventListener('pointercancel', () => {
+      if (plannerClaimed) {
+        plannerClaimed = false;
+        onPlannerRelease?.();
+      }
       dragFrom = null;
       pointerDownAt = null;
     });

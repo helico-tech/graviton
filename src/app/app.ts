@@ -8,7 +8,25 @@
 import { createDebugSession } from './debug-api.ts';
 import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts';
 import { getLevel, levelIds } from './levels.ts';
+import type { CompiledLevel } from './levels.ts';
 import { effectiveTicksThisFrame } from './loop.ts';
+import {
+  GHOST_HORIZON_TICKS,
+  addNode as plannerAddNode,
+  beginLaunchDrag as plannerBeginLaunchDrag,
+  beginNodeDrag as plannerBeginNodeDrag,
+  createPlannerState,
+  discardDraft as plannerDiscardDraft,
+  endDrag as plannerEndDrag,
+  reintegrate as plannerReintegrate,
+  removeNode as plannerRemoveNode,
+  selectNode as plannerSelectNode,
+  setHorizon as plannerSetHorizon,
+  setPlan as plannerSetPlan,
+  updateLaunchDrag as plannerUpdateLaunchDrag,
+  updateNodeDrag as plannerUpdateNodeDrag,
+} from './planner.ts';
+import type { Drag, PlannerState } from './planner.ts';
 import { selectionName as selectionNameOf } from './selection.ts';
 import type { ReadoutRow, Selection } from './selection.ts';
 import { getSolution } from './solutions.ts';
@@ -21,6 +39,11 @@ import type { WarpRung } from './warp.ts';
 import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
+import { planToCommands, validatePlan } from '../planner/plan.ts';
+import type { FlightPlan } from '../planner/plan.ts';
+import type { Ghost } from '../planner/ghost.ts';
+import { solutionReadout } from '../planner/readout.ts';
+import type { SolutionReadout } from '../planner/readout.ts';
 
 const EMPTY_LEVEL_NAMES: FrameLevelNames = {
   bodyIds: [],
@@ -110,6 +133,73 @@ export interface App {
    *  contact once `state().contacts[i].impactTick` records one), present-time cursor and axis
    *  range -- `null` before anything is loaded, like `state()`/`hash()`. */
   timelineData(): TimelineData | null;
+
+  // -- Planner (GRV-0026, GAME-0001 §4.4-4.6) -------------------------------------------------
+  // Every mutator here reintegrates the ghost synchronously before returning (src/app/planner.ts's
+  // `reintegrate`) -- the debug API and real pointer/keyboard input drive it identically; the UI
+  // layer is responsible for not calling the drag updaters more than once per animation frame
+  // (design note), not this module for debouncing them itself.
+  plan(): FlightPlan | null;
+  /** Replaces the draft outright (debug API's own `setPlan`) -- clears any in-progress drag and
+   *  selection, then reintegrates. */
+  setPlan(plan: FlightPlan): void;
+  discardDraft(): void;
+  beginLaunchDrag(args: { rail: number; worldX: number; worldY: number }): void;
+  updateLaunchDrag(args: { worldX: number; worldY: number; metresPerPixel: number }): void;
+  beginNodeDrag(args: {
+    index: number;
+    handle: 'prograde' | 'lateral';
+    worldX: number;
+    worldY: number;
+  }): void;
+  updateNodeDrag(args: { worldX: number; worldY: number; metresPerPixel: number }): void;
+  endDrag(): void;
+  selectNode(index: number | null): void;
+  selectedNode(): number | null;
+  drag(): Drag | null;
+  addNode(args: { tick: number }): void;
+  removeNode(args: { index: number }): void;
+  ghost(): Ghost | null;
+  /** The ghost's own solution readout (src/planner/readout.ts) -- distinct from `solution()`
+   *  above, which is the level's *committed campaign* solution log; this one is what the current
+   *  draft's ghost would do. `null` without a draft or a ghost (an infeasible launch draws no
+   *  ghost -- see `planIssues`). */
+  planSolution(): SolutionReadout | null;
+  /** validatePlan's own issues (plan.ts: node budget, sortedness, integer-ness) plus, if the
+   *  draft's launch is currently infeasible, a human-readable line naming checkLaunch's own
+   *  rejection reason -- the PLAN panel's Commit button reads this to decide whether it is
+   *  disabled and why (design note). `[]` when the draft is valid or there is none. */
+  planIssues(): string[];
+  /** `null` is "the present"; otherwise the tick `frame()` reads bodies/rails/contacts at (GAME-
+   *  0001 §4.6 "horizon scrub"). Nothing in the simulation moves because of this. */
+  setHorizon(tick: number | null): void;
+  horizon(): number | null;
+  /** Appends `planToCommands` (plan.ts) to the session log at the draft's own (already-future)
+   *  launch tick and clears the draft (design note). Throws if there is no draft or it is
+   *  currently invalid (`planIssues()` non-empty) -- mirrors `warpTo`'s own throw-on-misuse style
+   *  rather than silently doing nothing. */
+  commitPlan(): void;
+}
+
+/** A raw `{ scenario, seed }` load (the parity-spec path) carries no compiled level, but the
+ *  planner needs *some* `CompiledLevel` to hand `validatePlan`/`integrateGhost`/`checkLaunch` --
+ *  mirrors src/planner/ghost.test.ts's own `wrapAsLevel`: placeholder names/ids, the caller's own
+ *  scenario and seed, nothing else read by the planner. */
+function wrapScenarioAsLevel({ scenario, seed }: LoadArgs): CompiledLevel {
+  return {
+    schema: 1,
+    id: '',
+    name: '',
+    brief: '',
+    debrief: '',
+    seed,
+    names: { bodies: [], rails: [], contacts: [] },
+    bodyIds: [],
+    railIds: [],
+    contactIds: [],
+    bodyClasses: [],
+    scenario,
+  };
 }
 
 const DASH = '—';
@@ -134,6 +224,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
   let currentSelection: Selection = null;
   let currentSolution: CompiledSolution | null = null;
   const trailSet: TrailSet = createTrailSet();
+  // The full compiled level the planner needs (levelNames above is only the render-facing
+  // subset); null exactly when nothing is loaded.
+  let currentLevel: CompiledLevel | null = null;
+  let plannerState: PlannerState = createPlannerState();
 
   function statusValues(): StatusValues {
     if (!ready || currentDt === null) return NO_STATE;
@@ -164,8 +258,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       brief = null;
       levelNames = EMPTY_LEVEL_NAMES;
       currentLevelId = null;
+      currentLevel = null;
       currentSelection = null;
       currentSolution = null;
+      plannerState = createPlannerState();
       resetTrailSet(trailSet);
       emit({ id, knownIds: levelIds() }, true);
       return undefined;
@@ -177,8 +273,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     brief = { name: level.name, text: level.brief };
     levelNames = level;
     currentLevelId = level.id;
+    currentLevel = level;
     currentSelection = null;
     currentSolution = null;
+    plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
     ready = true;
@@ -193,8 +291,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     postName = DASH; // a raw Scenario carries no body names to read a post from
     levelNames = EMPTY_LEVEL_NAMES;
     currentLevelId = null; // a raw Scenario has no level id, so no committed solution to find
+    currentLevel = wrapScenarioAsLevel(args);
     currentSelection = null;
     currentSolution = null;
+    plannerState = createPlannerState();
     resetTrailSet(trailSet);
     resetWarp();
     ready = true;
@@ -234,10 +334,43 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
         });
       }
     });
+
+    // Ghost events (GRV-0026 acceptance): its own nodes, closest approach and impact, prefixed
+    // "ghost." so they never collide with a committed solution's own launch/impact keys above --
+    // a still-uncommitted draft targeting the same contact a prior probe already cleared is a real
+    // case (a backup attempt), and the two must stay distinguishable.
+    let rangeTicks = currentSolution?.ticks ?? Math.max(snap.tick, 1);
+    const ghost = plannerState.ghost;
+    if (ghost) {
+      (plannerState.draft?.nodes ?? []).forEach((node, index) => {
+        marks.push({
+          key: `ghost.node.${index}`,
+          tick: node.atTick,
+          label: formatSimTime({ tick: node.atTick, dt }),
+        });
+      });
+      for (const event of ghost.events) {
+        if (event.kind === 'closestApproach') {
+          marks.push({
+            key: `ghost.closestApproach.${event.contact}`,
+            tick: event.tick,
+            label: formatSimTime({ tick: event.tick, dt }),
+          });
+        } else if (event.kind === 'impact') {
+          marks.push({
+            key: `ghost.impact.${event.contact}`,
+            tick: event.tick,
+            label: formatSimTime({ tick: event.tick, dt }),
+          });
+        }
+      }
+      rangeTicks = Math.max(rangeTicks, ghost.fromTick + ghost.samples.count);
+    }
+
     return {
       marks,
       cursor: { tick: snap.tick, label: formatSimTime({ tick: snap.tick, dt }) },
-      rangeTicks: currentSolution?.ticks ?? Math.max(snap.tick, 1),
+      rangeTicks,
     };
   }
 
@@ -260,6 +393,44 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     emit();
   }
 
+  /** Re-integrates the ghost from the current draft (src/app/planner.ts's own `reintegrate`) --
+   *  a no-op if nothing is loaded. Every planner mutator below calls this synchronously so the
+   *  debug API and real pointer input see the same up-to-date ghost the instant they return
+   *  (design note's "synchronous in debug mode"); the UI layer's own rAF loop is what keeps a
+   *  fast pointermove stream from calling the drag updaters more than once per frame. */
+  function reintegratePlan(): void {
+    if (!currentLevel) return;
+    const nowTick = session.state().tick;
+    plannerState = plannerReintegrate({
+      state: plannerState,
+      level: currentLevel,
+      log: session.log(),
+      nowTick,
+      horizonTick: nowTick + GHOST_HORIZON_TICKS,
+    });
+  }
+
+  function planIssues(): string[] {
+    if (!plannerState.draft || !currentLevel) return [];
+    const issues = validatePlan({ plan: plannerState.draft, level: currentLevel });
+    if (plannerState.launchRejection)
+      issues.push(`launch rejected: ${plannerState.launchRejection}`);
+    return issues;
+  }
+
+  function commitPlan(): void {
+    const draft = plannerState.draft;
+    if (!draft) throw new Error('app: commitPlan called with no draft');
+    const issues = planIssues();
+    if (issues.length > 0)
+      throw new Error(`app: commitPlan called on an invalid draft (${issues.join('; ')})`);
+
+    const probeIndex = session.state().count;
+    for (const command of planToCommands({ plan: draft, probeIndex })) session.command(command);
+    plannerState = plannerDiscardDraft(plannerState);
+    emit();
+  }
+
   return {
     loadLevel,
     load,
@@ -273,7 +444,10 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     hash: () => session.hash(),
     state: () => session.state(),
     run: (args) => session.run(args),
-    frame: () => session.captureFrame(levelNames),
+    frame: () => {
+      const t = plannerState.horizon === null ? undefined : plannerState.horizon * (currentDt ?? 0);
+      return session.captureFrame(levelNames, t);
+    },
     trails: () => {
       const points = new Map<number, readonly { x: number; y: number }[]>();
       trailSet.buffers.forEach((buffer, index) => points.set(index, trailPoints(buffer)));
@@ -289,5 +463,75 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     loadSolution,
     solution: () => currentSolution,
     timelineData,
+
+    plan: () => plannerState.draft,
+    setPlan: (plan) => {
+      plannerState = plannerSetPlan({ state: plannerState, plan });
+      reintegratePlan();
+      emit();
+    },
+    discardDraft: () => {
+      plannerState = plannerDiscardDraft(plannerState);
+      emit();
+    },
+    beginLaunchDrag: ({ rail, worldX, worldY }) => {
+      plannerState = plannerBeginLaunchDrag({ state: plannerState, rail, worldX, worldY });
+      emit();
+    },
+    updateLaunchDrag: ({ worldX, worldY, metresPerPixel }) => {
+      if (!currentLevel) return;
+      plannerState = plannerUpdateLaunchDrag({
+        state: plannerState,
+        level: currentLevel,
+        worldX,
+        worldY,
+        tick: session.state().tick,
+        metresPerPixel,
+      });
+      reintegratePlan();
+      emit();
+    },
+    beginNodeDrag: ({ index, handle, worldX, worldY }) => {
+      plannerState = plannerBeginNodeDrag({ state: plannerState, index, handle, worldX, worldY });
+      emit();
+    },
+    updateNodeDrag: ({ worldX, worldY, metresPerPixel }) => {
+      plannerState = plannerUpdateNodeDrag({ state: plannerState, worldX, worldY, metresPerPixel });
+      reintegratePlan();
+      emit();
+    },
+    endDrag: () => {
+      plannerState = plannerEndDrag(plannerState);
+      emit();
+    },
+    selectNode: (index) => {
+      plannerState = plannerSelectNode({ state: plannerState, index });
+      emit();
+    },
+    selectedNode: () => plannerState.selectedNode,
+    drag: () => plannerState.drag,
+    addNode: ({ tick }) => {
+      if (!currentLevel) return;
+      plannerState = plannerAddNode({ state: plannerState, level: currentLevel, tick });
+      reintegratePlan();
+      emit();
+    },
+    removeNode: ({ index }) => {
+      plannerState = plannerRemoveNode({ state: plannerState, index });
+      reintegratePlan();
+      emit();
+    },
+    ghost: () => plannerState.ghost,
+    planSolution: () =>
+      plannerState.ghost && currentLevel
+        ? solutionReadout({ ghost: plannerState.ghost, level: currentLevel })
+        : null,
+    planIssues,
+    setHorizon: (tick) => {
+      plannerState = plannerSetHorizon({ state: plannerState, tick });
+      emit();
+    },
+    horizon: () => plannerState.horizon,
+    commitPlan,
   };
 }

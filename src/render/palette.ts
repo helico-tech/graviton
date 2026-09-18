@@ -113,10 +113,12 @@ export const MARKER_SHAPES = {
  *  each with its own dash pattern -- the thing palette.test.ts checks for uniqueness. A flown
  *  trail's colour still switches to `KNOWN_DIM` once its probe is expended (plot.ts), which is
  *  GAME-0002 §4's separate "Dimmed solid" row: still the *solid* (observed) dash pattern, dimmed
- *  by colour alone, not a new dash to register. Burn nodes, extrapolation and locked-plan
- *  segments belong to the planner (later epic, "no planner" in this unit's rules) and are not
- *  registered here. */
+ *  by colour alone, not a new dash to register. `ghost` is the planner's own dashed path
+ *  (GRV-0026, src/render/ghost.ts) -- "Dashed | Predicted from... a loaded plan", distinct from
+ *  a body's own orbit dash so the two never read as the same kind of prediction at a glance.
+ *  Extrapolation and locked-plan segments are later epics and are not registered here. */
 export const LINE_STYLES = {
   orbit: { dash: [6, 4], color: KNOWN_DIM },
   trail: { dash: [], color: KNOWN },
+  ghost: { dash: [3, 3], color: KNOWN },
 } as const;

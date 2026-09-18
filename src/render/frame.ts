@@ -166,9 +166,25 @@ export function largestOrbitApoapsis(bodies: BodyTable): number {
  *  itself). Ephemeris is evaluated fresh at `sim.tick * sim.scenario.dt` rather than reused from
  *  `sim.scratch.tickStartEph`, which lags the sim's own clock by one tick right after `advance`
  *  returns (and is never populated before the first tick) -- exactly the staleness a render must
- *  not show. */
-export function captureFrame({ sim, level }: { sim: Sim; level: FrameLevelNames }): Frame {
-  const t = sim.tick * sim.scenario.dt;
+ *  not show.
+ *
+ *  `t`, if given, overrides the instant bodies/rails/contacts are read at (GRV-0026's horizon
+ *  scrub, GAME-0001 §4.6: "bodies are exact from the ephemeris" at the scrubbed tick) -- tier one
+ *  is an O(1) closed-form query at any time (docs/domain/simulation-determinism.md's two-tier
+ *  model), so this needs no stepping. `objects` (probes) are never affected by it: a dynamic
+ *  object has no analytic position away from `sim`'s own current tick, so they -- and `Frame.tick`
+ *  itself -- always read the simulation's real "now", exactly as the design note specifies
+ *  ("probes/trails are drawn as at present"). */
+export function captureFrame({
+  sim,
+  level,
+  t: tOverride,
+}: {
+  sim: Sim;
+  level: FrameLevelNames;
+  t?: number;
+}): Frame {
+  const t = tOverride ?? sim.tick * sim.scenario.dt;
   const eph = makeEphemerisOut(sim.bodies.count);
   evaluateEphemeris(sim.bodies, t, eph);
 
