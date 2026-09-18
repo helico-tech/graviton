@@ -134,13 +134,28 @@ test('--check fails when the committed evidence no longer matches what verify wo
   expect(check.messages.some((m) => m.includes('solo.evidence.json'))).toBe(true);
 });
 
-test('a level without a solution is reported, not failed', () => {
-  fs.writeFileSync(path.join(levelsDir, 'solo.level.json'), canonicalJson(noContactLevel('solo')));
+test('a fixture (T prefix) without a solution is reported, not failed', () => {
+  fs.writeFileSync(
+    path.join(levelsDir, 'T00-solo.level.json'),
+    canonicalJson(noContactLevel('T00-solo')),
+  );
 
   const result = verifyLevels({ levelsDir, check: false });
 
-  expect(result).toEqual({ ok: true, messages: ['levels: solo no solution'] });
-  expect(fs.existsSync(path.join(levelsDir, 'solo.evidence.json'))).toBe(false);
+  expect(result).toEqual({ ok: true, messages: ['levels: T00-solo no solution'] });
+  expect(fs.existsSync(path.join(levelsDir, 'T00-solo.evidence.json'))).toBe(false);
+});
+
+test('a campaign level (L prefix) without a solution fails', () => {
+  fs.writeFileSync(
+    path.join(levelsDir, 'L01-solo.level.json'),
+    canonicalJson(noContactLevel('L01-solo')),
+  );
+
+  const result = verifyLevels({ levelsDir, check: false });
+
+  expect(result).toEqual({ ok: false, messages: ['levels: L01-solo FAILED: no solution'] });
+  expect(fs.existsSync(path.join(levelsDir, 'L01-solo.evidence.json'))).toBe(false);
 });
 
 test('a level whose solution does not clear every contact writes evidence and fails', () => {

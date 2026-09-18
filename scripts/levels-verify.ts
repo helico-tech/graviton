@@ -1,8 +1,10 @@
 // Replays every level's solution and writes its evidence file beside it (ADR-0006 §5, docs/work/
 // GRV-0017-level-verifier-and-evidence.md). Mirrors levels-build.ts's --check semantics: without
 // it, writes `<id>.evidence.json`; with it, writes nothing and fails if the evidence on disk
-// would change. A level with no solution is reported, not failed (campaign levels are gated in
-// GRV-0019).
+// would change. A campaign level (id starting with `L`) with no solution fails -- `pnpm check`
+// must prove every campaign level solvable (GRV-0019, GAME-0001 §9's data-driven campaign). A
+// fixture (id starting with `T`, or anything else not yet following the campaign convention) with
+// no solution is only reported, unchanged from GRV-0017.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -68,7 +70,12 @@ export function verifyLevels({
     const solutionPath = path.join(levelsDir, `${id}.solution.json`);
 
     if (!fs.existsSync(solutionPath)) {
-      messages.push(`levels: ${id} no solution`);
+      if (id.startsWith('L')) {
+        ok = false;
+        messages.push(`levels: ${id} FAILED: no solution`);
+      } else {
+        messages.push(`levels: ${id} no solution`);
+      }
       continue;
     }
 

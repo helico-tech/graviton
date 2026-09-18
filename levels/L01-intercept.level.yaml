@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=./schema/level.schema.json
+#
+# GRV-0019, campaign beat 1 (GAME-0001 §6): fixed contact, one rail, gravity negligible. Corvai is
+# a brown-dwarf-class primary (2.5e28 kg, ~13.2 Jupiter masses -- the low end of the class) with
+# Meskel and Yarune as two small rocky/icy bodies on the same 0.66 au orbit, 1.7 deg apart in mean
+# anomaly: ~3.0e6 km apart at epoch, which a probe at the rail's own muzzle band covers in a few
+# hours. At that range, Corvai's pull bends the flight by a few hundredths of a degree over the
+# whole transfer -- see docs/evidence/GRV-0019/README.md for the measured deflection, both at full
+# mass and with every body's mu scaled by 1e-6.
+schema: 1
+id: L01-intercept
+name: Intercept
+brief: >-
+  Meskel Rail has a single contact in range: a derelict hulk settled on Yarune, a few hours out at
+  cruise speed. Nothing else is moving nearby -- plan the launch, commit it, and clear the hulk
+  before the window closes.
+debrief: >-
+  The hulk never moved. Everything in the plan was aimed at where Yarune's spin would carry it by
+  the time the probe arrived, not at where it sat when you looked. A launch vector is a promise
+  about where the contact will be, not where it is.
+seed: 190119001
+streams: []
+dt: 30 s
+
+bodies:
+  - id: corvai
+    name: Corvai
+    class: star
+    mass: 2.5e28 kg
+    radius: 75000 km
+    rotationPeriod: 5 h
+    axialPhaseAtEpoch: 0 deg
+
+  - id: meskel
+    name: Meskel
+    class: rock
+    mass: 4e22 kg
+    radius: 900 km
+    rotationPeriod: 16 h
+    axialPhaseAtEpoch: 0 deg
+    orbit:
+      parent: corvai
+      a: 0.66 au
+      e: 0.02
+      argPeriapsis: 0 deg
+      meanAnomalyAtEpoch: 0 deg
+
+  - id: yarune
+    name: Yarune
+    class: ice
+    mass: 5e22 kg
+    radius: 950 km
+    rotationPeriod: 18 h
+    axialPhaseAtEpoch: 0 deg
+    orbit:
+      parent: corvai
+      a: 0.66 au
+      e: 0.015
+      argPeriapsis: 0 deg
+      meanAnomalyAtEpoch: 1.7 deg
+
+rails:
+  - id: meskel-rail
+    name: Meskel Rail
+    host: meskel
+    longitude: 0 deg
+    muzzleSpeed: { min: 120 km/s, max: 280 km/s }
+    headingCone: 60 deg
+    reloadTime: 4 h
+
+probes:
+  - id: runner
+    name: Runner
+    count: 2
+    dryMass: 420 kg
+    propellantMass: 680 kg
+    exhaustVelocity: 31 km/s
+    maxThrust: 9.4 kN
+    nodeBudget: 0
+
+contacts:
+  - kind: fixed
+    id: drift-hulk
+    name: Drift Hulk
+    host: yarune
+    longitude: 0 deg
+    captureRadius: 35 km
+    clearedBy:
+      minimumImpactEnergy: 5 TJ

@@ -1,7 +1,7 @@
 ---
 id: GRV-0019
 epic: EPIC-04
-status: todo
+status: done
 ---
 # GRV-0019 Level 01: Intercept
 
@@ -24,3 +24,9 @@ status: todo
   and the three commands.
 
 **Verification.** `pnpm check`, `pnpm levels:solve L01-intercept` reproducing the committed solution.
+
+**Delivered.** `levels/L01-intercept.level.yaml` (Corvai/Meskel/Yarune, gravity negligible at
+0.0076 deg over the flight, measured against a 1e-6-`mu` run), solved deterministically by
+`pnpm levels:solve L01-intercept --write` and verified; `levels-verify.ts` now fails an `L`-prefix
+campaign level with no solution (test-first); `docs/README.md` gained a `Levels` section. Evidence:
+`docs/evidence/GRV-0019/README.md`.

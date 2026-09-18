@@ -1,0 +1,14 @@
+{
+  "level": "L01-intercept",
+  "log": [
+    {
+      "heading": 973673621,
+      "kind": "launch",
+      "rail": 0,
+      "speed": 120000000,
+      "tick": 2464
+    }
+  ],
+  "simVersion": 3,
+  "ticks": 3303
+}
