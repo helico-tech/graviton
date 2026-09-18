@@ -1,8 +1,9 @@
 ---
-status: open
+status: triaged
 priority: P3
 filed: 2026-09-18
 filed-by: agent
+work: GRV-0027
 ---
 # No automatic drop to 1x on impact (GAME-0001 §4.11)
 
