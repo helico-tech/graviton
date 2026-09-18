@@ -204,16 +204,25 @@ export function largestOrbitApoapsis(bodies: BodyTable): number {
  *  point is that the post never sees the true, live state of a dynamic object, only what its own
  *  telemetry has confirmed plus a prediction from there. A missing or `null`-predicted entry
  *  draws nothing for that object (`FrameObject.observed` false) -- there is no true state to fall
- *  back to. */
+ *  back to.
+ *
+ *  `confirmedCleared`, one entry per `sim.contacts` index (GRV-0032): whether telemetry has
+ *  confirmed *that* contact cleared (src/app/confirmed.ts's `confirmedContactState`), never
+ *  `sim.contactState.cleared` itself -- the same boundary `observed` already keeps for objects,
+ *  now closed for contacts too (the glyph must not turn confirmed-good before its own telemetry
+ *  arrives). Missing entries default to `false` (uncleared) -- callers that don't care about
+ *  contacts (most of frame.test.ts) can omit it entirely. */
 export function captureFrame({
   sim,
   level,
   observed,
+  confirmedCleared = [],
   t: tOverride,
 }: {
   sim: Sim;
   level: FrameLevelNames;
   observed: readonly FrameObservation[];
+  confirmedCleared?: readonly boolean[];
   t?: number;
 }): Frame {
   const t = tOverride ?? sim.tick * sim.scenario.dt;
@@ -253,7 +262,7 @@ export function captureFrame({
   for (let i = 0; i < sim.contacts.count; i++) {
     const point = contactPoint({ bodies: sim.bodies, contacts: sim.contacts, contact: i, t, eph });
     const { id, name } = nameAt(level.contactIds, level.names.contacts, i, 'contact');
-    contacts.push({ id, name, x: point.x, y: point.y, cleared: sim.contactState.cleared[i] !== 0 });
+    contacts.push({ id, name, x: point.x, y: point.y, cleared: confirmedCleared[i] ?? false });
   }
 
   const objects: FrameObject[] = [];

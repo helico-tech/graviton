@@ -87,7 +87,16 @@ test('clicking the rail host selects it and every field matches an independently
   expect(gate.violations()).toEqual([]);
 });
 
-test('after the committed solution replays to its impact tick, the probe reads expended and the contact reads cleared', async ({
+// GRV-0032: this used to warp only one tick past the true impact and expect EXPENDED/CLEARED
+// straight away -- the true-state read the unit closed. L01's post sees the true impact within a
+// tick (co-located, GRV-0029), but a long post-impact occlusion (meskel's own day/night cycle,
+// confirmed directly: the post's own observation of the probe goes dark around tick 2830, well
+// before impact, and doesn't return until telemetry actually confirms the expend around 3796 --
+// the same window tests/e2e/events.spec.ts and src/app/app.test.ts already document, just wider
+// than either spells out) means the panel goes from FLYING/UNCLEARED (mid-flight, still observed)
+// straight to a blacked-out `—` (no observation at all to read SPEED/RANGE/STATE from) through and
+// past the true impact, only resolving to EXPENDED/CLEARED once real telemetry catches up.
+test('the probe panel reads FLYING, then blacks out through the true impact, then EXPENDED once telemetry confirms it; the contact panel stays UNCLEARED until the same confirmation', async ({
   page,
 }) => {
   const gate = attachConsoleGate(page, { failOnAnyConsoleMessage: true });
@@ -96,19 +105,43 @@ test('after the committed solution replays to its impact tick, the probe reads e
   await page.waitForFunction(() => window.graviton?.ready === true);
 
   await page.evaluate(() => window.graviton!.loadSolution());
+
+  // Mid-flight, well before the occlusion starts (~2830) -- the ordinary, fully-observed case.
+  await page.evaluate((tick) => window.graviton!.warpTo(tick), 2600);
+  await page.evaluate(() => window.graviton!.select({ kind: 'probe', index: 0 }));
+  let probeReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(probeReadouts['selection.state']).toBe('FLYING');
+  await page.evaluate(() => window.graviton!.select({ kind: 'contact', index: 0 }));
+  let contactReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(contactReadouts['selection.state']).toBe('UNCLEARED');
+
+  // Just past the true impact tick -- inside the occlusion window: the post has no observation of
+  // the probe at all (never the true, live "it already hit" state), so the probe panel reads a
+  // plain dash; the contact panel, driven by the event log rather than the observed view, still
+  // honestly reads UNCLEARED (telemetry has shown it neither hit nor cleared yet).
   await page.evaluate((tick) => window.graviton!.warpTo(tick), AFTER_IMPACT_TICK);
+  await page.evaluate(() => window.graviton!.select({ kind: 'probe', index: 0 }));
+  probeReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(probeReadouts['selection.state']).toBe('—');
+  await page.evaluate(() => window.graviton!.select({ kind: 'contact', index: 0 }));
+  contactReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(contactReadouts['selection.state']).toBe('UNCLEARED');
+
+  // Comfortably past where telemetry actually confirms it (the same 3900 margin events.spec.ts
+  // and app.test.ts already use).
+  await page.evaluate((tick) => window.graviton!.warpTo(tick), 3900);
 
   await page.evaluate(() => window.graviton!.select({ kind: 'probe', index: 0 }));
-  const probeReadouts = await page.evaluate(() => window.graviton!.readouts());
-  expect(probeReadouts['selection.state']).toMatch(/^EXPENDED/);
+  probeReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(probeReadouts['selection.state']).toMatch(/^EXPENDED AT .* \(confirmed /);
   // Every field this unit's acceptance lists for a probe is present as DOM text.
   for (const field of ['mass', 'propellant', 'deltaV', 'speed', 'range', 'state']) {
     expect(probeReadouts[`selection.${field}`]).toBeTruthy();
   }
 
   await page.evaluate(() => window.graviton!.select({ kind: 'contact', index: 0 }));
-  const contactReadouts = await page.evaluate(() => window.graviton!.readouts());
-  expect(contactReadouts['selection.state']).toMatch(/^CLEARED AT /);
+  contactReadouts = await page.evaluate(() => window.graviton!.readouts());
+  expect(contactReadouts['selection.state']).toMatch(/^CLEARED AT .* \(confirmed /);
 
   expect(gate.violations()).toEqual([]);
 });

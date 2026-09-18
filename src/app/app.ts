@@ -5,6 +5,7 @@
 // App so a headless driver and a human see identical state (ADR-0004 §1-2,
 // docs/domain/simulation-determinism.md rule 10: this never writes simulation state itself,
 // `advance` does -- it only reads what the session already computed).
+import { confirmedContactState } from './confirmed.ts';
 import { createDebugSession } from './debug-api.ts';
 import type { LoadArgs, RunArgs, RunResult, StateSnapshot } from './debug-api.ts';
 import { diffObservedEvents, sampleClosestApproach } from './events.ts';
@@ -48,7 +49,6 @@ import {
   togglePause as togglePauseRung,
 } from './warp.ts';
 import type { WarpRung } from './warp.ts';
-import { NO_IMPACT } from '../sim/contacts.ts';
 import type { Command } from '../sim/sim.ts';
 import type { Frame, FrameLevelNames } from '../render/frame.ts';
 import { diffAmendmentNodes } from '../planner/plan.ts';
@@ -588,6 +588,20 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     return best;
   }
 
+  /** One entry per contact, `true` once telemetry has confirmed *that* contact cleared (GRV-0032)
+   *  -- `frame()`'s own `captureFrame` call reads this, never `sim.contactState.cleared` directly,
+   *  so the plot's glyph and the selection ring (which reads the same `Frame.contacts[i].cleared`,
+   *  src/render/plot.ts) both turn confirmed-good on the same tick the panel does. */
+  function confirmedClearedArray(): boolean[] {
+    const contactCount = currentLevel?.scenario.contacts.length ?? 0;
+    const cleared: boolean[] = new Array(contactCount);
+    for (let i = 0; i < contactCount; i++) {
+      const confirmed = confirmedContactState({ eventLog, contact: i });
+      cleared[i] = confirmed !== 'uncleared' && confirmed.cleared;
+    }
+    return cleared;
+  }
+
   function timelineData(): TimelineData | null {
     if (!ready || currentDt === null) return null;
     const dt = currentDt;
@@ -602,15 +616,20 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
         });
       }
     });
-    snap.contacts.forEach((contact, index) => {
-      if (contact.impactTick !== NO_IMPACT) {
+    // GRV-0032: the impact mark sits at the confirmed event's own simulation tick, only once
+    // telemetry has actually confirmed it (`confirmedContactState`, never `snap.contacts` -- the
+    // true state a moment after impact but well before the post's own telemetry arrives).
+    const contactCount = currentLevel?.scenario.contacts.length ?? 0;
+    for (let index = 0; index < contactCount; index++) {
+      const confirmed = confirmedContactState({ eventLog, contact: index });
+      if (confirmed !== 'uncleared') {
         marks.push({
           key: `impact.${index}`,
-          tick: contact.impactTick,
-          label: formatSimTime({ tick: contact.impactTick, dt }),
+          tick: confirmed.impactTick,
+          label: formatSimTime({ tick: confirmed.impactTick, dt }),
         });
       }
-    });
+    }
 
     // Ghost events (GRV-0026 acceptance): its own nodes, closest approach and impact, prefixed
     // "ghost." so they never collide with a committed solution's own launch/impact keys above --
@@ -948,7 +967,7 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
     },
     frame: () => {
       const t = plannerState.horizon === null ? undefined : plannerState.horizon * (currentDt ?? 0);
-      return session.captureFrame(levelNames, currentObserved, t);
+      return session.captureFrame(levelNames, currentObserved, confirmedClearedArray(), t);
     },
     trails: () => {
       const points = new Map<number, readonly { x: number; y: number }[]>();
@@ -969,7 +988,8 @@ export function createApp({ onChange }: { onChange: (change: AppChange) => void 
       emit();
     },
     selection: () => currentSelection,
-    selectionReadouts: () => session.describeSelection(levelNames, currentSelection),
+    selectionReadouts: () =>
+      session.describeSelection(levelNames, currentSelection, eventLog, currentObserved),
     selectionName: () => selectionNameOf({ level: levelNames, selection: currentSelection }),
     loadSolution,
     solution: () => currentSolution,

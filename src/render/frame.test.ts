@@ -121,6 +121,28 @@ describe('captureFrame', () => {
     expect(contact.cleared).toBe(false);
   });
 
+  // GRV-0032: captureFrame reads `confirmedCleared`, never sim.contactState -- the glyph must not
+  // turn confirmed-good before its own telemetry does, and must not stay dim once it has.
+  describe('contacts.cleared reads confirmedCleared, never sim.contactState', () => {
+    test('the true state already reads cleared, but telemetry has not confirmed it: still uncleared', () => {
+      const sim = createSim({ scenario: scenario(), seed: 1 });
+      sim.contactState.cleared[0] = 1;
+      const frame = captureFrame({ sim, level: levelNames, observed: [] });
+      expect(frame.contacts[0]!.cleared).toBe(false);
+    });
+
+    test('confirmedCleared says cleared even though the true state has not (never possible in a real replay, but proves the source is the param): cleared', () => {
+      const sim = createSim({ scenario: scenario(), seed: 1 });
+      const frame = captureFrame({
+        sim,
+        level: levelNames,
+        observed: [],
+        confirmedCleared: [true],
+      });
+      expect(frame.contacts[0]!.cleared).toBe(true);
+    });
+  });
+
   test('no dynamic objects at tick 0 (nothing launched yet)', () => {
     const sim = createSim({ scenario: scenario(), seed: 1 });
     const frame = captureFrame({ sim, level: levelNames, observed: [] });
