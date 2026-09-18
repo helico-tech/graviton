@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -47,3 +47,24 @@ it as clear rather than blocked, matching the "an endpoint sits exactly on its o
 reasoning already applied to the source.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0030, commit 2495fa2. `segmentBlocked` (`src/sim/lightcone.ts`)
+reformulated via closest-point-on-segment projection (the centre projected onto the segment,
+parameter clamped to `[0,1]`, squared distance vs `(R+margin)²` with the existing relative slack)
+rather than the discriminant test -- symmetric in A and B, no separate source/target special
+case needed. New tests: target on a far body's surface, both endpoints on surfaces, a genuinely
+blocked far case; the pre-existing "exact tangent" test moved off the now-ambiguous exact boundary
+value. `SIM_VERSION` unchanged by this fix alone (bumped separately, see below, once the fix
+exposed a real occlusion in a committed golden).
+
+The fix also correctly *rejects* commands the old, cancellation-broken check let through:
+`tests/golden/flyby-burn.json`'s own committed burn (issued at tick 2997) turned out to send its
+order straight through the moon -- closest approach to the moon's centre 354,083 km against a
+1,821,600 km radius, a margin of **-1,467,517 km inside the body**, not a boundary graze. Re-solved
+with `issueTickFor` searching backward from the same `atTick: 3000` for the latest genuinely clear
+issue tick: found immediately at **tick 2277** (closest approach 1,821,600.00003 km, margin
++0.00003 km -- surface-tangent, correctly clear). `expectedHash` re-recorded; `SIM_VERSION` bumped
+4 → 5 (`src/sim/version.ts`) since which command logs the simulation accepts changed; every
+committed level solution's own `simVersion` field bumped alongside. `intercept.json` (the other
+golden) and every campaign level's trajectory stayed bit-identical, hash included --
+docs/evidence/GRV-0030/README.md has the full verification output.

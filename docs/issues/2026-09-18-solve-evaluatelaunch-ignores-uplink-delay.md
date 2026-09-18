@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -47,3 +47,16 @@ corruption is in `evaluateLaunch`'s own trial evaluation, not the real simulatio
 geometry).
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0030, commit 2495fa2. `evaluateLaunch` (`src/levels/solve.ts`) now
+issues its own trial command through `issueTickFor` -- exactly the path the real committed
+log/`planToCommands` uses -- treating `launchTick` as the tick the probe should *exist* at (the
+search's own window/compass-search machinery already reasoned in those terms) rather than the
+issue tick. The probe is only ever read once `sim.objects.count` shows it actually exists; the
+flight-tick budget is extended by the pre-materialisation wait so a delayed post gets the same
+flight-time budget a co-located one always did. Test-first (`src/levels/solve.test.ts`): the old
+code scored T01's own known-good candidate (real replay: clears, distance ~0) as a 223,200 km
+miss; the fixed code agrees with the real replay. `T00-compiler-fixture`'s and `L01-intercept`'s
+own committed solutions still reproduce byte-identically (`pnpm levels:verify --check`) -- both
+are zero-delay levels, unaffected by construction. `levels/T01-far-post.solution.json` is now the
+solver's own, unmodified `pnpm levels:solve T01-far-post --write` output.

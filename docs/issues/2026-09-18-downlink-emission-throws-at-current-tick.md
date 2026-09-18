@@ -1,5 +1,5 @@
 ---
-status: triaged
+status: resolved
 priority: P1
 filed: 2026-09-18
 filed-by: agent
@@ -41,3 +41,10 @@ identity) instead of falling through to the `t0+1`-requiring interpolation path;
 throw for `t0 > last` (still genuinely out of bounds) and `t0 < first`.
 
 ## Resolution
+
+**Resolved 2026-09-18** in GRV-0030, commit 2495fa2. Applied exactly the suggested fix:
+`sampleState` (`src/sim/history.ts`) now returns the `t0` sample directly when `t0 === last`
+(Hermite's own `s=0` identity) instead of falling through to the `t0+1`-requiring interpolation
+path; `t0 > last` and `t0 < first` still throw. Regression test added
+(`src/sim/history.test.ts`): `downlinkEmission({ receiveTick: sim.tick })` right after `advance`
+no longer throws.
