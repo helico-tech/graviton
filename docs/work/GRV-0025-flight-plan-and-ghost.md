@@ -1,7 +1,7 @@
 ---
 id: GRV-0025
 epic: EPIC-06
-status: todo
+status: done
 ---
 # GRV-0025 Flight plan and ghost integration
 
@@ -36,3 +36,10 @@ the earliest edited node).
 - Throughput: one ghost over level 01's whole flight in well under 100 ms (report the number).
 
 **Verification.** `pnpm check`, both goldens MATCH.
+
+**Delivered.** `src/planner/{plan,ghost,readout}.ts` plus tests; `pnpm check`, `pnpm docs:validate`,
+`pnpm build`, `pnpm e2e` and `pnpm headless` on both goldens all green. See
+`docs/evidence/GRV-0025/README.md` for the gate tail, throughput numbers (8.6 ms / 19.8 ms, both
+well under the 100 ms bar) and a deliberate deviation (the ghost's own internal command issuance is
+lazy, per-node, rather than `planToCommands`'s all-at-launch commit semantics — required for the
+cache to work, proven equivalent by the ghost invariant test).
