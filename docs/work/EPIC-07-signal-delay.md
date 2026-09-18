@@ -1,6 +1,6 @@
 ---
 id: EPIC-07
-status: in-progress
+status: done
 ---
 # EPIC-07 Signal delay
 
